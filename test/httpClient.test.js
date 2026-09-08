@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -67,6 +67,16 @@ before(async () => {
             if (url.pathname === '/final') {
                 res.writeHead(200, { 'Content-Type': 'text/plain' });
                 res.end(`FINAL method=${req.method} referer=${req.headers.referer ?? ''}`);
+                return;
+            }
+            if (url.pathname === '/r302big') {
+                res.writeHead(302, { Location: '/big' });
+                res.end();
+                return;
+            }
+            if (url.pathname === '/big') {
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end('x'.repeat(64 * 1024));
                 return;
             }
             if (url.pathname === '/status500') {
@@ -234,6 +244,55 @@ describe('HttpClient：SSL 状态', () => {
         assert.equal(res.status, 200);
         assert.equal(JSON.parse(res.body).method, 'GET');
         assert.equal(client.ssl, false);
+    });
+});
+
+describe('HttpClient：响应体大小上限', () => {
+    afterEach(() => {
+        HttpClient.maxBodyMb = 0;
+    });
+
+    it('默认 0：不限制响应体大小', async () => {
+        const res = await new HttpClient().get(`${baseUrl()}/big`);
+        assert.equal(res.status, 200);
+        assert.equal(res.body.length, 64 * 1024);
+    });
+
+    it('设置上限：超出时抛 HTTP Request Failed: 响应体过大（上限 N MB）', async () => {
+        HttpClient.maxBodyMb = 0.001; // 1 KB
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/big`),
+            (err) => err instanceof Error
+                && err.message.startsWith('HTTP Request Failed:')
+                && err.message.includes('响应体过大')
+                && err.message.includes('上限 0.001 MB'),
+        );
+    });
+
+    it('设置上限：未超出时正常返回', async () => {
+        HttpClient.maxBodyMb = 1;
+        const res = await new HttpClient().get(`${baseUrl()}/final`);
+        assert.equal(res.status, 200);
+        assert.ok(res.body.startsWith('FINAL method=GET'));
+    });
+
+    it('非法值（负数 / NaN）按无限制处理', async () => {
+        for (const value of [-1, NaN]) {
+            HttpClient.maxBodyMb = value;
+            const res = await new HttpClient().get(`${baseUrl()}/big`);
+            assert.equal(res.status, 200, `maxBodyMb=${value} 应视为无限制`);
+            assert.equal(res.body.length, 64 * 1024);
+        }
+    });
+
+    it('重定向后的响应同样受上限约束（按每一跳各自适用）', async () => {
+        HttpClient.maxBodyMb = 0.001; // 1 KB
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/r302big`),
+            (err) => err instanceof Error
+                && err.message.startsWith('HTTP Request Failed:')
+                && err.message.includes('响应体过大'),
+        );
     });
 });
 

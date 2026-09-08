@@ -35,7 +35,7 @@ src/
 | --- | --- | --- |
 | `ysyuki-lib-on-nodejs/config` | `Config` | 宿主根解析、`.env` / `config.json` / `dev.config.json` 读取 |
 | `ysyuki-lib-on-nodejs/logger` | `Logger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道） |
-| `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA） |
+| `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
 | `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` | 入站 HTTP 服务端子域入口（barrel） |
 | `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭 |

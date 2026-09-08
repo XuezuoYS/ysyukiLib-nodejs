@@ -34,7 +34,9 @@ import { Config } from './config.js';
  * - 响应头键名为小写（node 规范）；
  * - 响应体按 UTF-8 解码为字符串；
  * - 自定义 CA 文件缺失时回退系统 CA（通用库不因宿主缺少 CA 文件而失败）；
- *   自定义 CA 路径可用 HttpClient.caFilePath 重定向。
+ *   自定义 CA 路径可用 HttpClient.caFilePath 重定向；
+ * - 响应体默认全量缓冲；`HttpClient.maxBodyMb` 可设置单个响应体大小上限（MB，0 为无限制），
+ *   超限抛 `HTTP Request Failed: 响应体过大（上限 N MB）`。
  *
  * 常用函数：
  * - requireHttp(method, url, headers, data):发起 HTTP 请求
@@ -102,6 +104,18 @@ function getHttpsAgent() {
 }
 
 /**
+ * 读取当前响应体上限（字节，0 表示无限制）
+ *
+ * 每次请求（重定向的每一跳）读取一次；非法值（负数、NaN、非数字）按无限制处理。
+ *
+ * @returns {number} 字节上限；0 为无限制
+ */
+function maxBodyBytes() {
+    const mb = Number(HttpClient.maxBodyMb);
+    return Number.isFinite(mb) && mb > 0 ? Math.floor(mb * 1024 * 1024) : 0;
+}
+
+/**
  * 将实例/调用方请求头规范化为 node 外发头对象
  *
  * 数字键按原始 "Name: value" 行解析
@@ -156,9 +170,21 @@ function requestOnce(method, target, headers, body, isSSL, signal) {
         };
 
         const req = lib.request(options, (res) => {
+            const maxBytes = maxBodyBytes();
             /** @type {Buffer[]} */
             const chunks = [];
-            res.on('data', (chunk) => chunks.push(chunk));
+            let size = 0;
+            res.on('data', (chunk) => {
+                size += chunk.length;
+                if (maxBytes > 0 && size > maxBytes) {
+                    // 超限先给出明确错误（后续事件不再覆盖），再断链，避免继续读入内存
+                    const err = new Error(`响应体过大（上限 ${HttpClient.maxBodyMb} MB）`);
+                    reject(err);
+                    req.destroy(err);
+                    return;
+                }
+                chunks.push(chunk);
+            });
             res.on('end', () => {
                 /** @type {Record<string, string>} */
                 const responseHeaders = {};
@@ -231,6 +257,15 @@ export class HttpClient {
     static set caFilePath(file) {
         HttpClient.#caFilePath = file === null ? null : String(file);
     }
+
+    /**
+     * 单个响应体大小上限（MB），0 表示无限制（默认）
+     *
+     * 按单个响应计：重定向链的每一跳各自适用；超限抛
+     * `HTTP Request Failed: 响应体过大（上限 N MB）`，超出部分不会读入内存。
+     * @type {number}
+     */
+    static maxBodyMb = 0;
 
     /**
      * 安全化URL处理函数
