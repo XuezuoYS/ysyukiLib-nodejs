@@ -9,8 +9,8 @@ import { makeCtx, runIn } from './contextFixture.js';
 /**
  * HttpReq：请求侧一行式取值门面
  *
- * 请求体（getPostData）语义与既有 RequestJson.getPostDataItem 逐条对照，
- * 确保契约不漂移；query / param / header / cookie / ip 为新增能力。
+ * 请求体（getPostData）语义逐条对照对外契约，确保行为不漂移；
+ * query / param / header / cookie / ip 与请求体共用同一套类型语义。
  */
 describe('HttpReq.getPostData 请求体取值', () => {
     it('字段存在且类型匹配：原样返回', () => {

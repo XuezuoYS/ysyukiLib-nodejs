@@ -9,7 +9,7 @@ import { getCurrentContext } from './context.js';
  * AppError(400, '参数错误')，由入口唯一兜底出口输出 `{ "status": message }`。
  * 字段存在但类型不符时始终抛错（默认值不生效）。
  *
- * 类型语义（与既有 RequestJson.getPostDataItem 完全一致）：
+ * 类型语义：
  * - string：字符串
  * - int：整数（拒绝小数、数字字符串、布尔）
  * - bool：布尔值
@@ -264,7 +264,7 @@ function readScalar(exists, value, typeArg, defaultValue) {
 }
 
 /**
- * 构造类型错误（与既有错误文案一致，属已上线契约）
+ * 构造类型错误（文案属对外契约，勿改动）
  *
  * @param {string} type 期望类型
  * @returns {AppError} 400 类型错误
@@ -341,7 +341,7 @@ function validateParam(value, type) {
 }
 
 /**
- * 严格类型校验（请求体语义，与既有 getPostDataItem 完全一致）
+ * 严格类型校验（JSON 请求体语义：值必须已是目标类型）
  *
  * @param {any} data 字段值
  * @param {string} type 类型名
@@ -365,7 +365,7 @@ function validateStrict(data, type) {
             }
             return data;
         case 'array':
-            // 对象/数组同属"结构"语义，一并接受（既有契约）
+            // 对象/数组同属"结构"语义，一并接受（对外契约，勿收紧）
             if (!(Array.isArray(data) || (typeof data === 'object' && data !== null))) {
                 throw typeError(type);
             }

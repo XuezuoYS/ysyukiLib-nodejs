@@ -9,7 +9,8 @@ import { makeCtx, makeResStub, runIn } from './contextFixture.js';
 /**
  * HttpRes：响应侧一行式输出门面
  *
- * 序列化与无体形态语义与既有 RequestJson.responseJson 逐条对照（PHP json_encode 对齐契约）。
+ * 序列化与无体形态逐条对照对外契约（对齐 PHP `json_encode` 的
+ * `JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE`）。
  */
 
 /**
@@ -50,7 +51,7 @@ describe('HttpRes.jsonRes 统一 JSON 出口', () => {
         assert.equal(override.headers['Content-Type'], 'application/json; charset=utf-8');
     });
 
-    it('headers 默认 null：与既有行为完全一致（仅 Content-Type）', () => {
+    it('headers 默认 null：只写 Content-Type', () => {
         const res = writeWith(() => HttpRes.jsonRes({ a: 1 }));
         assert.deepEqual(Object.keys(res.headers), ['Content-Type']);
     });

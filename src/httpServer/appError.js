@@ -1,8 +1,8 @@
 /**
- * 内部统一错误类型：业务侧 throw，由应用入口的 handleRequest 尾部 catch 统一输出
+ * 业务可预期错误：业务侧 throw，由 HttpServer 的唯一兜底出口统一输出
  *
- * 该 catch 为全服务唯一的异常兜底出口，捕获后输出 `{ "status": message }` 响应体，
- * 输出形态为已上线契约：{status: message}。
+ * 该出口捕获 AppError 后输出 `{ "status": message }` 响应体，状态码取 `statusCode`
+ * （默认 400）；这是本库对外的错误响应契约，`data` 仅内部使用、不进入响应体。
  *
  * 常用函数：
  * - new AppError(message, statusCode, data):业务可预期错误

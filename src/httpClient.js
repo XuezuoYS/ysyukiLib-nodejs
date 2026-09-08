@@ -219,7 +219,7 @@ function requestOnce(method, target, headers, body, isSSL, signal) {
 
 export class HttpClient {
     /**
-     * 最近一次请求的 URL（保留原实现的实例状态字段）
+     * 最近一次请求的 URL（实例状态，便于排障时查看）
      * @type {string}
      */
     url = '';
@@ -231,7 +231,7 @@ export class HttpClient {
     headers = {};
 
     /**
-     * 最近一次请求是否为 SSL（保留原实现的实例状态字段，随每一跳更新；
+     * 最近一次请求是否为 SSL（实例状态，随每一跳更新；
      * 重定向跨协议时以最后一跳为准）
      * @type {boolean}
      */

@@ -550,7 +550,7 @@ export class HttpServer {
     }
 
     /**
-     * 404 契约体（维持既有形状）
+     * 404 契约体（`{name, error, path, method}`，对外契约勿改形状）
      *
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      */
@@ -564,7 +564,7 @@ export class HttpServer {
     }
 
     /**
-     * 405 契约体 + Allow 头（维持既有形状）
+     * 405 契约体 + `Allow` 头（形状同 404，对外契约勿改）
      *
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      * @param {string[]} allowed 允许的方法
