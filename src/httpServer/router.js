@@ -117,6 +117,22 @@ export function encodeUrlParam(value, options = {}) {
 }
 
 /**
+ * 按位置一次性应用替换（从后往前，避免下标位移）
+ *
+ * @param {string} source 原串
+ * @param {{start: number, end: number, text: string}[]} edits 替换项（按任意顺序，互不重叠）
+ * @returns {string} 替换结果
+ */
+function applyEdits(source, edits) {
+    const sorted = [...edits].sort((a, b) => b.start - a.start);
+    let result = source;
+    for (const edit of sorted) {
+        result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+    }
+    return result;
+}
+
+/**
  * 补锚定（`@` 模式缺 `^` / `$` 时补上；已有则不重复）
  *
  * @param {string} source 正则源
@@ -384,33 +400,39 @@ export class Router {
         }
 
         const { encode = true } = options;
-        let url = this.basePath + route;
+        const url = this.basePath + route;
+
+        // 按**原串位置**一次性替换：不能对"已替换过的 URL"再按块文本查找替换——
+        // 注入的值里若恰好含块文本（如 encode:false 时 a='{b}'），会被当成占位符二次替换。
+        /** @type {{start: number, end: number, text: string}[]} */
+        const edits = [];
 
         for (const match of url.matchAll(BLOCK_PATTERN)) {
             const [block, prefix, name, type, optional] = match;
+            const start = match.index;
 
             if (name !== '' && Object.prototype.hasOwnProperty.call(params, name)) {
                 const raw = String(params[name]);
                 const value = encode
                     ? encodeUrlParam(raw, { keepSlash: type === 'path' || type === 'all' })
                     : raw;
-                url = url.split(block).join(prefix + value);
+                edits.push({ start, end: start + block.length, text: prefix + value });
                 continue;
             }
 
             if (optional === undefined) {
                 if (name === '') {
-                    url = url.split(block).join('');
+                    edits.push({ start, end: start + block.length, text: '' });
                     continue;
                 }
                 throw new Error(`Route '${routeName}' requires parameter '${name}'.`);
             }
 
             // 可选段缺失：连同分隔符一起剥离（block 本身已含前缀）
-            url = url.split(block).join('');
+            edits.push({ start, end: start + block.length, text: '' });
         }
 
-        return url;
+        return applyEdits(url, edits);
     }
 
     /**
@@ -488,12 +510,15 @@ export class Router {
             return { regex: null, paramTypes: {} };
         }
 
-        let compiled = route;
+        // 与 generate 同策略：按原串位置一次性替换，避免"替换结果里含块文本"被二次替换
+        /** @type {{start: number, end: number, text: string}[]} */
+        const edits = [];
         /** @type {Record<string, string>} */
         const paramTypes = {};
 
         for (const match of route.matchAll(BLOCK_PATTERN)) {
             const [block, prefix, name, type = 'string', optional] = match;
+            const start = match.index;
 
             if (!Object.prototype.hasOwnProperty.call(this.matchTypes, type)) {
                 throw new Error(`未知的路由类型：${type}（可用 addMatchTypes 追加）`);
@@ -511,10 +536,10 @@ export class Router {
             const blockRegex = `${prefixRegex}(${namePart}${typePattern})`;
             const optionalMark = optional === undefined ? '' : '?';
 
-            compiled = compiled.split(block).join(`(?:${blockRegex})${optionalMark}`);
+            edits.push({ start, end: start + block.length, text: `(?:${blockRegex})${optionalMark}` });
         }
 
-        return { regex: new RegExp(`^${compiled}$`, 'u'), paramTypes };
+        return { regex: new RegExp(`^${applyEdits(route, edits)}$`, 'u'), paramTypes };
     }
 
     /**

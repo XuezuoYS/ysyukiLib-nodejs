@@ -351,6 +351,19 @@ describe('Router：反向路由参数编码', () => {
         assert.equal(r.generate('file', { name: 'AC/DC' }, { encode: false }), '/file/AC/DC');
     });
 
+    it('generate：值里含块文本不被二次替换（按原串位置替换）', () => {
+        const r = new Router();
+        r.map('GET', '/x/{a}/{b}', noop, 'pair');
+        r.map('GET', '/y/{a}', noop, 'single');
+
+        // encode:false 时值原样落进 URL，修复前会被当成占位符再替换一次
+        assert.equal(r.generate('pair', { a: '{b}', b: 'B' }, { encode: false }), '/x/{b}/B');
+        assert.equal(r.generate('pair', { a: 'A', b: '{b}' }, { encode: false }), '/x/A/{b}');
+        assert.equal(r.generate('single', { a: '{a}' }, { encode: false }), '/y/{a}');
+        // 默认编码下值里的花括号会被编码，本来就不会命中块文本
+        assert.equal(r.generate('pair', { a: '{b}', b: 'B' }), '/x/%7Bb%7D/B');
+    });
+
     it('generate + match 往返：保留字符以百分号形式到达处理器（已知语义）', () => {
         const r = new Router();
         r.map('GET', '/file/{name}', noop, 'file');
