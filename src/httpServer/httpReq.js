@@ -27,11 +27,20 @@ import { getCurrentContext } from './context.js';
  * 表单体走字符串强转（`'42'` 可取 int、`'true'` 可取 bool）。
  * 两种请求体的调用写法完全一致：`HttpReq.getPostData('page', 'int', 1)`。
  *
+ * 取值类型保证：声明了 type 的取值一律返回该类型（string → string、int / float → number、
+ * bool → boolean、array → array）。字符串来源（请求体表单 / query / param / header / cookie）
+ * 按字符串来源语义强转；值缺失时返回显式缺省值，未显式传缺省值则返回该类型的零值
+ * （bool → false、int / float → 0、array → []、string / none → ''）。
+ * getHeader / getCookie 的第二参为 type（默认 none），不是已知类型名时按缺省值处理，
+ * 兼容旧写法 `getHeader('x-missing', 'def')` / `getCookie('sid', 'def')`；
+ * 注意 `'none'` 等已知类型名作为第二参会被当作类型声明，不再能当缺省值字面量使用
+ * （旧写法 `getCookie('sid', 'none')` 已改为返回该类型的零值，缺省值请用第三参）。
+ *
  * 常用函数：
  * - getPostData(name, type, default?)：请求体取值
  * - getQuery(name, type, default?)：查询串取值
  * - getParam(name, type, default?)：路径参数取值
- * - getHeader(name, default?) / getCookie(name, default?) / getIp()
+ * - getHeader(name, type, default?) / getCookie(name, type, default?) / getIp()
  * - getRawBody() / getBody() / getMethod() / getPath() / getRequestId() / current()
  *
  */
@@ -93,34 +102,48 @@ export class HttpReq {
     /**
      * 获取请求头（键名大小写不敏感）
      *
+     * 请求头值天然是字符串，故按字符串来源语义转换（与 query 一致）：
+     * `getHeader('x-num', 'int')` 得到 number。第二参不是已知类型名时按"缺省值"处理
+     * （兼容旧写法 `getHeader('x-missing', 'def')`）。
+     * 头缺失时返回缺省值；未显式传缺省值时按 type 返回零值（bool → false、
+     * int / float → 0、array → []、string / none / 其它 → ''）。
+     *
      * @param {string} name 头名
-     * @param {string} [defaultValue] 缺省值
-     * @default defaultValue = ''
-     * @returns {string} 头值（同名多值以 `, ` 连接）或默认值
+     * @param {string} [type] 类型，none 则不校验（非已知类型名时视为缺省值）
+     * @default type = 'none'
+     * @param {any} [defaultValue] 缺省值；省略时按 type 取零值
+     * @returns {any} 头值（同名多值以 `, ` 连接）按 type 转换后的值，或缺省值
      */
-    static getHeader(name, defaultValue = '') {
+    static getHeader(name, type = 'none', defaultValue = undefined) {
         const { req } = getCurrentContext();
-        const value = req.headers[String(name).toLowerCase()];
-        if (value === undefined) {
-            return defaultValue;
-        }
-        return Array.isArray(value) ? value.join(', ') : value;
+        const raw = req.headers[String(name).toLowerCase()];
+        const exists = raw !== undefined;
+        const value = exists && Array.isArray(raw) ? raw.join(', ') : raw;
+        return readScalar(exists, value, type, defaultValue);
     }
 
     /**
      * 获取 Cookie（按需解析 `Cookie` 头，结果缓存在本次请求上下文）
      *
+     * Cookie 值天然是字符串，故按字符串来源语义转换（与 query 一致）：
+     * `getCookie('ci', 'int')` 得到 number、`getCookie('cb', 'bool')` 得到 boolean。
+     * 第二参不是已知类型名时按"缺省值"处理（兼容旧写法 `getCookie('sid', 'def')`）。
+     * Cookie 缺失时返回缺省值；未显式传缺省值时按 type 返回零值（bool → false、
+     * int / float → 0、array → []、string / none / 其它 → ''）。
+     *
      * @param {string} name Cookie 名
-     * @param {string} [defaultValue] 缺省值
-     * @default defaultValue = ''
-     * @returns {string} Cookie 值或默认值
+     * @param {string} [type] 类型，none 则不校验（非已知类型名时视为缺省值）
+     * @default type = 'none'
+     * @param {any} [defaultValue] 缺省值；省略时按 type 取零值
+     * @returns {any} Cookie 值按 type 转换后的值，或缺省值
      */
-    static getCookie(name, defaultValue = '') {
+    static getCookie(name, type = 'none', defaultValue = undefined) {
         const ctx = getCurrentContext();
         if (ctx.cookies === undefined) {
             ctx.cookies = parseCookieHeader(HttpReq.getHeader('cookie'));
         }
-        return Object.prototype.hasOwnProperty.call(ctx.cookies, name) ? ctx.cookies[name] : defaultValue;
+        const exists = Object.prototype.hasOwnProperty.call(ctx.cookies, name);
+        return readScalar(exists, exists ? ctx.cookies[name] : undefined, type, defaultValue);
     }
 
     /**
@@ -187,6 +210,57 @@ export class HttpReq {
     static current() {
         return getCurrentContext();
     }
+}
+
+/**
+ * 已知类型名（用于区分"类型位"与旧写法的"缺省值位"）
+ * @type {Record<string, true>}
+ */
+const TYPE_NAMES = {
+    none: true, string: true, int: true, bool: true, array: true, float: true,
+};
+
+/**
+ * 类型对应的零值（值缺失且未显式传缺省值时返回）
+ *
+ * @param {string} type 类型名
+ * @returns {any} 零值：bool → false、int / float → 0、array → []、其余（含 none）→ ''
+ */
+function zeroValueForType(type) {
+    switch (type) {
+        case 'bool':
+            return false;
+        case 'int':
+        case 'float':
+            return 0;
+        case 'array':
+            return [];
+        default:
+            return '';
+    }
+}
+
+/**
+ * 单值来源（header / cookie）取值：按字符串来源校验，值缺失时返回缺省值
+ *
+ * 第二参不是已知类型名时视为"缺省值"（兼容 `getHeader('x', 'def')` 旧写法）；
+ * 未显式传缺省值时按 type 返回零值，使调用方拿到的类型始终与声明一致。
+ *
+ * @param {boolean} exists 值是否存在
+ * @param {any} value 原始值（字符串来源）
+ * @param {string} typeArg 类型名或缺省值
+ * @param {any} defaultValue 显式缺省值（undefined 表示未传）
+ * @returns {any} 转换后的值或缺省值
+ */
+function readScalar(exists, value, typeArg, defaultValue) {
+    const isType = Object.prototype.hasOwnProperty.call(TYPE_NAMES, typeArg);
+    const type = isType ? typeArg : 'none';
+    const fallback = isType ? defaultValue : (defaultValue === undefined ? typeArg : defaultValue);
+
+    if (!exists) {
+        return fallback === undefined ? zeroValueForType(type) : fallback;
+    }
+    return validateFromString(String(value), type);
 }
 
 /**

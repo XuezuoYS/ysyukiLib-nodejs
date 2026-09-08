@@ -106,6 +106,29 @@ router.post('/login', () => {
 需要类型转换请用 `getPostData` 声明类型。空体/纯空白一律按空对象处理，非 JSON 且非表单的
 `Content-Type` 仍按 JSON 解析（非法即 400）。
 
+### 取值类型保证
+
+声明了 `type` 的取值**一律返回该类型**（`string` → string、`int` / `float` → number、
+`bool` → boolean、`array` → array）。字符串来源（表单体 / query / param / header / cookie）
+按字符串来源语义强转；值缺失时返回显式缺省值，未显式传缺省值则返回该类型的零值：
+
+| `type` | 返回类型 | 缺失时的零值 |
+| --- | --- | --- |
+| `string` / `none` / 其它 | string / 原值 | `''` |
+| `int` / `float` | number | `0` |
+| `bool` | boolean | `false` |
+| `array` | array | `[]` |
+
+```js
+const uid = HttpReq.getCookie('uid', 'int');        // number；cookie 缺失 → 0
+const vip = HttpReq.getHeader('x-vip', 'bool');     // boolean；头缺失 → false
+const page = HttpReq.getQuery('page', 'int', 1);    // number；缺省值优先于零值
+```
+
+`getHeader` / `getCookie` 的第二参是 `type`（默认 `none`），不是已知类型名时按"缺省值"
+处理（兼容旧写法 `getCookie('sid', 'def')`）；注意 `'none'` 等已知类型名会被当作类型声明，
+缺省值请用第三参。
+
 ## 接入
 
 ### 方式一：本地目录依赖（推荐，未发布时）
@@ -231,11 +254,17 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     `HttpReq.getPostData` 按请求体来源选择校验语义（JSON 严格 / 表单字符串强转），调用写法不变；
     此前表单请求会被当非法 JSON 直接 400。同名键取首值，与 `getQuery` 一致。
 
-11. **超限请求体与路径折叠**（本次）：请求体超限（413）后剩余数据会被读掉，keep-alive
+11. **取值类型保证**（本次）：`getHeader` / `getCookie` 新增 `type` 位（默认 `none`），
+    与 `getQuery` / `getParam` 一致地按声明类型返回（`getCookie('uid','int')` → number）；
+    值缺失且未传缺省值时返回该类型零值（`bool` → false、`int` / `float` → 0、`array` → []、
+    `string` → ''）。第二参非已知类型名时仍按缺省值处理（兼容旧写法），但 `'none'` 等
+    已知类型名不再能作为缺省值字面量。
+
+12. **超限请求体与路径折叠**（本次）：请求体超限（413）后剩余数据会被读掉，keep-alive
     连接可继续复用（此前复用会 ECONNRESET）；`normalizePath` 折叠两个及以上连续斜杠
     （此前只折叠一次，`//a///b/` 会残留 `//`）。
 
-12. **兜底出口**（本次）：响应已开始后发生异常时 destroy 响应，客户端立即收到连接中断
+13. **兜底出口**（本次）：响应已开始后发生异常时 destroy 响应，客户端立即收到连接中断
     （此前只记日志，客户端会一直等到 `requestTimeout`）。
 
 ## 从旧 API 迁移（宿主改造用）

@@ -208,6 +208,47 @@ describe('HttpReq.getHeader 请求头', () => {
             assert.equal(HttpReq.getHeader('x-multi'), 'a, b');
         });
     });
+
+    it('第二参为 type：按字符串来源转换为声明类型', () => {
+        runIn(makeCtx({ headers: { 'x-num': '42', 'x-ratio': '1.5', 'x-flag': 'true', 'x-text': 'abc' } }), () => {
+            assert.equal(HttpReq.getHeader('x-num', 'int'), 42);
+            assert.equal(HttpReq.getHeader('x-ratio', 'float'), 1.5);
+            assert.equal(HttpReq.getHeader('x-flag', 'bool'), true);
+            assert.equal(HttpReq.getHeader('x-text', 'string'), 'abc');
+            assert.equal(HttpReq.getHeader('x-text'), 'abc');
+            assert.equal(typeof HttpReq.getHeader('x-num', 'int'), 'number');
+            assert.equal(typeof HttpReq.getHeader('x-flag', 'bool'), 'boolean');
+        });
+    });
+
+    it('缺失且未传缺省值：按 type 返回零值（类型始终与声明一致）', () => {
+        runIn(makeCtx({ headers: {} }), () => {
+            assert.equal(HttpReq.getHeader('missing', 'bool'), false);
+            assert.equal(HttpReq.getHeader('missing', 'int'), 0);
+            assert.equal(HttpReq.getHeader('missing', 'float'), 0);
+            assert.deepEqual(HttpReq.getHeader('missing', 'array'), []);
+            assert.equal(HttpReq.getHeader('missing', 'string'), '');
+            assert.equal(HttpReq.getHeader('missing', 'none'), '');
+            assert.equal(HttpReq.getHeader('missing'), '');
+        });
+    });
+
+    it('显式缺省值优先于零值；非类型名的第二参仍按缺省值处理', () => {
+        runIn(makeCtx({ headers: {} }), () => {
+            assert.equal(HttpReq.getHeader('missing', 'int', 7), 7);
+            assert.equal(HttpReq.getHeader('missing', 'def'), 'def');
+            assert.equal(HttpReq.getHeader('missing', 'def', 'fallback'), 'fallback');
+        });
+    });
+
+    it('值存在但类型不符：抛 400 类型错误', () => {
+        runIn(makeCtx({ headers: { 'x-num': 'abc' } }), () => {
+            assert.throws(
+                () => HttpReq.getHeader('x-num', 'int'),
+                (err) => err instanceof AppError && err.statusCode === 400,
+            );
+        });
+    });
 });
 
 describe('HttpReq.getCookie', () => {
@@ -220,9 +261,54 @@ describe('HttpReq.getCookie', () => {
         });
     });
 
-    it('无 Cookie 头时返回默认值', () => {
+    it('无 Cookie 头时：返回缺省值或该类型的零值', () => {
         runIn(makeCtx({ headers: {} }), () => {
-            assert.equal(HttpReq.getCookie('sid', 'none'), 'none');
+            assert.equal(HttpReq.getCookie('sid'), '');
+            assert.equal(HttpReq.getCookie('sid', 'int', 9), 9);
+            // 'none' 现为类型名（不校验），不再被当作缺省值字面量
+            assert.equal(HttpReq.getCookie('sid', 'none'), '');
+        });
+    });
+
+    it('第二参为 type：按字符串来源转换为声明类型', () => {
+        runIn(makeCtx({ headers: { cookie: 'ci=42; cr=1.5; cb=true; cb0=0; cs=hello' } }), () => {
+            assert.equal(HttpReq.getCookie('ci', 'int'), 42);
+            assert.equal(HttpReq.getCookie('cr', 'float'), 1.5);
+            assert.equal(HttpReq.getCookie('cb', 'bool'), true);
+            assert.equal(HttpReq.getCookie('cb0', 'bool'), false);
+            assert.equal(HttpReq.getCookie('cs', 'string'), 'hello');
+            assert.equal(HttpReq.getCookie('ci'), '42', '未声明类型时仍返回原始字符串');
+            assert.equal(typeof HttpReq.getCookie('ci', 'int'), 'number');
+            assert.equal(typeof HttpReq.getCookie('cb', 'bool'), 'boolean');
+        });
+    });
+
+    it('缺失且未传缺省值：按 type 返回零值（类型始终与声明一致）', () => {
+        runIn(makeCtx({ headers: {} }), () => {
+            assert.equal(HttpReq.getCookie('missing', 'bool'), false);
+            assert.equal(HttpReq.getCookie('missing', 'int'), 0);
+            assert.equal(HttpReq.getCookie('missing', 'float'), 0);
+            assert.deepEqual(HttpReq.getCookie('missing', 'array'), []);
+            assert.equal(HttpReq.getCookie('missing', 'string'), '');
+            assert.equal(HttpReq.getCookie('missing', 'none'), '');
+            assert.equal(HttpReq.getCookie('missing'), '');
+        });
+    });
+
+    it('显式缺省值优先于零值；非类型名的第二参仍按缺省值处理', () => {
+        runIn(makeCtx({ headers: {} }), () => {
+            assert.equal(HttpReq.getCookie('missing', 'int', 7), 7);
+            assert.equal(HttpReq.getCookie('missing', 'def'), 'def');
+            assert.equal(HttpReq.getCookie('missing', 'def', 'fallback'), 'fallback');
+        });
+    });
+
+    it('值存在但类型不符：抛 400 类型错误', () => {
+        runIn(makeCtx({ headers: { cookie: 'ci=abc' } }), () => {
+            assert.throws(
+                () => HttpReq.getCookie('ci', 'int'),
+                (err) => err instanceof AppError && err.statusCode === 400,
+            );
         });
     });
 });
