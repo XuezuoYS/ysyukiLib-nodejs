@@ -140,9 +140,10 @@ describe('Logger：等级阈值与配置隔离', () => {
         }, /未知的日志等级/);
     });
 
-    it('默认等级实时跟随 isDev()：移除 dev.config.json 后同一实例立即不再记 info', () => {
+    it('默认等级跟随 isDev()：失效缓存后同一实例立即切换', () => {
         const log = Logger.create();
         rmSync(devFixture, { force: true });
+        Logger.resetDevCache(); // 同一路径上增删文件不会自动失效，须显式重置（见 Logger.defaultLevel 注释）
         try {
             const entries = captureStdout(() => {
                 log.info('生产应丢弃');
@@ -153,8 +154,58 @@ describe('Logger：等级阈值与配置隔离', () => {
             writeFileSync(devFixture, '{}', 'utf8');
         }
 
+        Logger.resetDevCache();
         const restored = captureStdout(() => log.info('恢复 dev 后重新记录'));
         assert.deepEqual(restored.map((e) => e.message), ['恢复 dev 后重新记录']);
+    });
+
+    it('defaultLevel 缓存 dev 判定：写日志不再每条同步 stat', () => {
+        const realIsDev = Config.isDev;
+        let calls = 0;
+        Config.isDev = () => {
+            calls += 1;
+            return realIsDev.call(Config);
+        };
+        try {
+            Logger.resetDevCache();
+            captureStdout(() => {
+                for (let i = 0; i < 50; i += 1) Logger.info('x');
+            });
+            assert.equal(calls, 1, '同一开发配置路径只应 stat 一次（而非每条日志一次）');
+
+            Logger.resetDevCache();
+            captureStdout(() => Logger.info('y'));
+            assert.equal(calls, 2, '显式失效后重新评估');
+        } finally {
+            Config.isDev = realIsDev;
+            Logger.resetDevCache();
+        }
+    });
+
+    it('setRootDir 与 devConfigFile 变更会主动失效缓存', () => {
+        const realIsDev = Config.isDev;
+        let calls = 0;
+        Config.isDev = () => {
+            calls += 1;
+            return realIsDev.call(Config);
+        };
+        try {
+            Logger.resetDevCache();
+            void Logger.defaultLevel;
+            assert.equal(calls, 1);
+
+            Config.setRootDir(dir);
+            void Logger.defaultLevel;
+            assert.equal(calls, 2, 'setRootDir 应失效缓存');
+
+            Config.devConfigFile = devFixture;
+            void Logger.defaultLevel;
+            assert.equal(calls, 3, 'devConfigFile 赋值应失效缓存');
+        } finally {
+            Config.isDev = realIsDev;
+            Config.setRootDir(dir);
+            Config.devConfigFile = devFixture;
+        }
     });
 
     it('子 logger 与根 Logger 共用文件通道，日期仅由 Logger.now 决定', () => {
@@ -214,6 +265,7 @@ describe('Logger 文件落盘与滚动', () => {
     it('非开发环境仅 warn/error（stdout 与文件同门控）', () => {
         Logger.logDir = join(dir, 'gate');
         rmSync(devFixture, { force: true }); // isDev() → false
+        Logger.resetDevCache();
         try {
             /** @type {Record<string, any>[]} */
             let entries = [];

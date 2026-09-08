@@ -158,6 +158,7 @@ export class Config {
         Config.#detectedRootDir = null;
         Config.#devConfigFile = null;
         Config.#hasWarnedConfig = false;
+        Logger.resetDevCache();
         Config.isEnvLoaded = false;
         Config.isConfigLoaded = false;
         Config.isDevConfigLoaded = false;
@@ -222,6 +223,7 @@ export class Config {
      */
     static set devConfigFile(file) {
         Config.#devConfigFile = file === null ? null : String(file);
+        Logger.resetDevCache();
     }
 
     /**

@@ -54,6 +54,14 @@ let logDirOverride = null;
 let lastDate = '';
 
 /**
+ * 默认等级缓存（写日志热路径上避免每次同步 stat dev.config.json）
+ *
+ * path 为缓存的开发配置路径，null 表示尚未求值。
+ * @type {{path: string|null, level: 'info'|'warn'}}
+ */
+const devStatusCache = { path: null, level: 'warn' };
+
+/**
  * 当前本地日期 YYYY-MM-DD（文件按服务器本地日切分，与业务 date 语义一致）
  *
  * @param {Date} now 当前时间
@@ -254,14 +262,38 @@ export class Logger {
     }
 
     /**
-     * 默认等级（实时求值：宿主根存在 dev.config.json 即 info，否则 warn）
+     * 默认等级（宿主根存在 dev.config.json 即 info，否则 warn）
      *
-     * 未显式设置等级的（子）logger 每次写日志时读取本值，因此增删 dev.config.json 即时生效。
+     * 结果按**开发配置路径**缓存：写日志是热路径，而 `Config.isDev()` 每次都要
+     * `existsSync` 同步 stat（实测 9µs/次，占每条被丢弃日志 100% 的开销，且阻塞事件循环）。
+     * 缓存随 `Config.devConfigFile` 路径变化自动失效；`Config.setRootDir()` 与显式
+     * 改 `Config.devConfigFile` 会主动调用 `Logger.resetDevCache()`，因此切换宿主根、
+     * 换开发配置路径后立即重新评估。
+     *
+     * 取舍：进程运行期在**同一路径**上增删 dev.config.json 不再即时生效，
+     * 需重启进程、重新 `setRootDir()`，或显式调用 `Logger.resetDevCache()`
+     * （生产环境该文件恒不存在，无影响）。
      *
      * @returns {'info'|'warn'} 默认等级
      */
     static get defaultLevel() {
-        return Config.isDev() ? 'info' : 'warn';
+        const file = Config.devConfigFile;
+        if (devStatusCache.path !== file) {
+            devStatusCache.path = file;
+            devStatusCache.level = Config.isDev() ? 'info' : 'warn';
+        }
+        return devStatusCache.level;
+    }
+
+    /**
+     * 失效默认等级缓存（宿主根或开发配置路径变更后调用）
+     *
+     * 下一次读取 `Logger.defaultLevel` 时重新检查 dev.config.json 是否存在。
+     *
+     * @returns {void}
+     */
+    static resetDevCache() {
+        devStatusCache.path = null;
     }
 
     /**

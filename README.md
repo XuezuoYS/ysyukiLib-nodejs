@@ -196,11 +196,14 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 ## 日志等级与配置隔离
 
 - **入口级（`Logger` 静态成员）**：`Logger.now`（记录日期源，子 logger 不提供日期配置）、
-  `Logger.logDir`、`Logger.defaultLevel`（实时求值：宿主根存在 `dev.config.json` 即 `info`，否则 `warn`）；
+  `Logger.logDir`、`Logger.defaultLevel`（宿主根存在 `dev.config.json` 即 `info`，否则 `warn`）；
+  该判定**按开发配置路径缓存**（写日志是热路径，避免每条日志同步 stat）：
+  `Config.setRootDir()` 与改 `Config.devConfigFile` 会自动失效，
+  同一路径上增删 `dev.config.json` 需显式 `Logger.resetDevCache()`（或重启）；
 - **子 logger 级**：`Logger.create({ level })` 返回的 `SubLogger` 各自持有记录等级，
   互不影响，也不影响根 `Logger`；`ServerLogger` 同样按实例隔离（服务名 + 等级）。
 - 等级为**阈值**语义：`warn` 记 warn+error，`info` 记全部，`error` 只记 error；
-  未显式设置时实时跟随 `Logger.defaultLevel`。
+  未显式设置时跟随 `Logger.defaultLevel`。
 
 ```js
 import { Logger } from '#YukiLib/logger';
@@ -271,6 +274,11 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     仍返回 `false`（行为不变），但会经 `Logger.warn` 记录一次警告（含文件路径与失败原因，
     不输出文件内容）；同一宿主根只告警一次，`setRootDir()` 重置。此前完全静默，
     配置未生效却无从察觉。
+
+15. **默认等级缓存**（本次）：`Logger.defaultLevel` 的 dev 判定按开发配置路径缓存，
+    写日志不再每条同步 `existsSync`（实测 8.56µs/条 → 0.37µs/条，降幅 96%）。
+    `Config.setRootDir()` / `Config.devConfigFile` 赋值自动失效；同一路径上增删
+    `dev.config.json` 需显式 `Logger.resetDevCache()`（此前为实时检查，代价是每条日志一次 stat）。
 
 ## 从旧 API 迁移（宿主改造用）
 
