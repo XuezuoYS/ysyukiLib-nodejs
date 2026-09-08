@@ -28,6 +28,128 @@ import { getCurrentContext } from './context.js';
  */
 const COOKIE_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
+/**
+ * Cookie Domain 合法主机名（每个标签 1-63 字符、字母数字与连字符、不以连字符开头/结尾）
+ * @type {RegExp}
+ */
+const COOKIE_DOMAIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+/** Cookie Domain 总长度上限（RFC 1035 主机名上限） */
+const MAX_DOMAIN_LENGTH = 253;
+
+/** Cookie Path 合法字符（RFC 6265 av-octet：可打印 ASCII 去掉 `;`） */
+const COOKIE_PATH_PATTERN = /^[\x20-\x3A\x3C-\x7E]*$/;
+
+/** SameSite 白名单（大小写不敏感，输出规范化）
+ * @type {Map<string, 'Strict'|'Lax'|'None'>}
+ */
+const SAMESITE_VALUES = new Map([['strict', 'Strict'], ['lax', 'Lax'], ['none', 'None']]);
+
+/**
+ * 属性值是否"未设置"（undefined / null / '' / false）
+ *
+ * `false` 一并算未设置，兼容 `Config.getConfig(key)` 取不到时返回 false 的常见写法。
+ *
+ * @param {any} value 属性值
+ * @returns {boolean} 是否未设置
+ */
+function isUnset(value) {
+    return value === undefined || value === null || value === false || value === '';
+}
+
+/**
+ * 校验并规范化 Domain 属性
+ *
+ * 允许前导点（`Domain=.example.com`，浏览器会忽略该点）；IDN 需先转 punycode。
+ *
+ * @param {any} domain domain 值
+ * @returns {string|null} 规范化后的域名，未设置返回 null
+ * @throws {Error} 域名语法非法
+ */
+function normalizeDomain(domain) {
+    if (isUnset(domain)) {
+        return null;
+    }
+    const text = String(domain);
+    const host = text.startsWith('.') ? text.slice(1) : text;
+    if (host.length === 0 || host.length > MAX_DOMAIN_LENGTH || !COOKIE_DOMAIN_PATTERN.test(host)) {
+        throw new Error(`Cookie Domain 非法：${text}（须为合法主机名，IDN 请先转 punycode）`);
+    }
+    return text;
+}
+
+/**
+ * 校验并规范化 Path 属性
+ *
+ * @param {any} path path 值
+ * @returns {string} 规范化后的路径（未设置时为 '/'）
+ * @throws {Error} 不以 `/` 开头，或含 `;`、控制字符、非 ASCII 字符
+ */
+function normalizePath(path) {
+    if (isUnset(path)) {
+        return '/';
+    }
+    const text = String(path);
+    if (!text.startsWith('/') || !COOKIE_PATH_PATTERN.test(text)) {
+        throw new Error(`Cookie Path 非法：${text}（须以 / 开头，且只含可打印 ASCII、不含 ; ）`);
+    }
+    return text;
+}
+
+/**
+ * 校验并规范化 Max-Age 属性
+ *
+ * @param {any} maxAge 有效期（秒）
+ * @returns {number|null} 整数秒（<= 0 表示删除 Cookie），未设置返回 null
+ * @throws {Error} 非有限数字
+ */
+function normalizeMaxAge(maxAge) {
+    if (isUnset(maxAge)) {
+        return null;
+    }
+    const seconds = Number(maxAge);
+    if (!Number.isFinite(seconds)) {
+        throw new Error(`Cookie Max-Age 非法：${String(maxAge)}（须为有限数字，单位秒）`);
+    }
+    return Math.floor(seconds);
+}
+
+/**
+ * 校验并规范化 Expires 属性
+ *
+ * @param {any} expires 过期时间（Date / ISO 字符串 / 时间戳）
+ * @returns {string|null} UTC 时间字符串，未设置返回 null
+ * @throws {Error} 无法解析为合法日期
+ */
+function normalizeExpires(expires) {
+    if (isUnset(expires)) {
+        return null;
+    }
+    const date = new Date(expires);
+    if (Number.isNaN(date.getTime())) {
+        throw new Error(`Cookie Expires 非法：${String(expires)}（须为 Date / ISO 字符串 / 时间戳）`);
+    }
+    return date.toUTCString();
+}
+
+/**
+ * 校验并规范化 SameSite 属性
+ *
+ * @param {any} sameSite sameSite 值
+ * @returns {'Strict'|'Lax'|'None'} 规范化后的取值（未设置时为 'Lax'）
+ * @throws {Error} 取值不在白名单
+ */
+function normalizeSameSite(sameSite) {
+    if (isUnset(sameSite)) {
+        return 'Lax';
+    }
+    const normalized = SAMESITE_VALUES.get(String(sameSite).toLowerCase());
+    if (normalized === undefined) {
+        throw new Error(`Cookie SameSite 非法：${String(sameSite)}（可用 Strict / Lax / None）`);
+    }
+    return normalized;
+}
+
 export class HttpRes {
     /**
      * 返回 JSON 数据（统一出口）
@@ -106,18 +228,22 @@ export class HttpRes {
     /**
      * 追加 Set-Cookie（同名 Cookie 可多次调用，互不覆盖）
      *
-     * @param {string} name Cookie 名（须为 RFC 6265 token；非法名抛 Error，由入口兜底出口转 500）
+     * 所有属性先校验再写出：非法值抛普通 Error（服务端配置错误 → 入口兜底出口记 error 日志并输出 500），
+     * 不会把畸形属性写进 Set-Cookie；空值（`undefined` / `null` / `''` / `false`）一律视为未设置。
+     *
+     * @param {string} name Cookie 名（须为 RFC 6265 token）
      * @param {string} value Cookie 值（自动 URL 编码）
      * @param {object} [options] 属性
-     * @param {string} [options.path] 路径，默认 '/'
-     * @param {number} [options.maxAge] 有效期（秒）
-     * @param {string|Date} [options.expires] 过期时间
-     * @param {string} [options.domain] 作用域
+     * @param {string|null|false} [options.path] 路径，默认 '/'（须以 `/` 开头、只含可打印 ASCII、不含 `;`）
+     * @param {number|null|false} [options.maxAge] 有效期（秒，须为有限数字；<= 0 表示删除）
+     * @param {string|Date|null|false} [options.expires] 过期时间（Date / ISO 字符串 / 时间戳）
+     * @param {string|null|false} [options.domain] 作用域（合法主机名，可带前导点；IDN 请先转 punycode）
      * @param {boolean} [options.secure] 仅 HTTPS
      * @param {boolean} [options.httpOnly] 禁止脚本读取，默认 true
-     * @param {'Strict'|'Lax'|'None'} [options.sameSite] SameSite 策略，默认 'Lax'
+     * @param {string|null|false} [options.sameSite] SameSite 策略，默认 'Lax'（大小写不敏感的
+     * Strict / Lax / None；`None` 需同时 `secure: true`，这是浏览器要求，库不强制）
      * @default options = {}
-     * @throws {Error} Cookie 名含非法字符（服务端编程错误，非 AppError；入口兜底出口转 500 并记 error 日志）
+     * @throws {Error} Cookie 名或任一属性值非法（服务端编程/配置错误，非 AppError）
      */
     static cookie(name, value, options = {}) {
         const cookieName = String(name);
@@ -127,24 +253,30 @@ export class HttpRes {
             throw new Error(`Cookie 名非法：${cookieName}（须为 RFC 6265 token）`);
         }
 
+        const maxAge = normalizeMaxAge(options.maxAge);
+        const expires = normalizeExpires(options.expires);
+        const domain = normalizeDomain(options.domain);
+        const path = normalizePath(options.path);
+        const sameSite = normalizeSameSite(options.sameSite);
+
         const parts = [`${cookieName}=${encodeURIComponent(String(value))}`];
-        if (options.maxAge !== undefined) {
-            parts.push(`Max-Age=${Math.floor(Number(options.maxAge))}`);
+        if (maxAge !== null) {
+            parts.push(`Max-Age=${maxAge}`);
         }
-        if (options.expires !== undefined) {
-            parts.push(`Expires=${new Date(options.expires).toUTCString()}`);
+        if (expires !== null) {
+            parts.push(`Expires=${expires}`);
         }
-        if (options.domain !== undefined) {
-            parts.push(`Domain=${options.domain}`);
+        if (domain !== null) {
+            parts.push(`Domain=${domain}`);
         }
-        parts.push(`Path=${options.path ?? '/'}`);
+        parts.push(`Path=${path}`);
         if (options.secure === true) {
             parts.push('Secure');
         }
         if (options.httpOnly !== false) {
             parts.push('HttpOnly');
         }
-        parts.push(`SameSite=${options.sameSite ?? 'Lax'}`);
+        parts.push(`SameSite=${sameSite}`);
 
         const { res } = getCurrentContext();
         const line = parts.join('; ');

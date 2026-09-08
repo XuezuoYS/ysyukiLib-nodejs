@@ -209,6 +209,68 @@ describe('HttpRes 响应修饰', () => {
         assert.deepEqual(res.cookieLines, ['__Host-sid.v1~x=v; Path=/; HttpOnly; SameSite=Lax']);
     });
 
+    it('cookie：合法属性全部规范化输出', () => {
+        const res = writeWith(() => {
+            HttpRes.cookie('sid', 'v', {
+                domain: '.example.com',
+                path: '/app',
+                maxAge: 60.7,
+                expires: '2030-01-01T00:00:00Z',
+                sameSite: 'none',
+            });
+        });
+        assert.deepEqual(res.cookieLines, [
+            'sid=v; Max-Age=60; Expires=Tue, 01 Jan 2030 00:00:00 GMT; Domain=.example.com; Path=/app; HttpOnly; SameSite=None',
+        ]);
+    });
+
+    it('cookie：空值一律视为未设置（兼容 Config.getConfig 取不到返回 false）', () => {
+        const res = writeWith(() => {
+            HttpRes.cookie('sid', 'v', { domain: false, path: '', maxAge: null, expires: undefined, sameSite: '' });
+        });
+        assert.deepEqual(res.cookieLines, ['sid=v; Path=/; HttpOnly; SameSite=Lax']);
+    });
+
+    it('cookie：单标签域名与 IP 字面量按主机名规则放行', () => {
+        const res = writeWith(() => {
+            HttpRes.cookie('a', '1', { domain: 'localhost' });
+            HttpRes.cookie('b', '2', { domain: '127.0.0.1' });
+        });
+        assert.deepEqual(res.cookieLines, [
+            'a=1; Domain=localhost; Path=/; HttpOnly; SameSite=Lax',
+            'b=2; Domain=127.0.0.1; Path=/; HttpOnly; SameSite=Lax',
+        ]);
+    });
+
+    it('cookie：非法属性值抛普通 Error（服务端配置错误，非 AppError）', () => {
+        const cases = [
+            ['domain', 'bad domain'],
+            ['domain', 'exa_mple.com'],
+            ['domain', '-bad.com'],
+            ['domain', `${'a'.repeat(64)}.com`],
+            ['domain', 'example.com.'],
+            ['domain', '中文.com'],
+            ['path', 'app'],
+            ['path', '/a;b'],
+            ['path', '/资料'],
+            ['maxAge', 'soon'],
+            ['maxAge', Infinity],
+            ['expires', 'not-a-date'],
+            ['sameSite', 'Sometimes'],
+        ];
+        for (const [key, value] of cases) {
+            runIn(makeCtx(), () => {
+                assert.throws(
+                    () => HttpRes.cookie('sid', 'v', { [key]: value }),
+                    (err) => err instanceof Error
+                        && !(err instanceof AppError)
+                        && err.message.includes('非法'),
+                    `${key}=${String(value)} 应抛错`,
+                );
+            });
+        }
+    });
+
     it('请求上下文之外调用：抛明确错误', () => {
         assert.throws(
             () => HttpRes.jsonRes({ a: 1 }),
