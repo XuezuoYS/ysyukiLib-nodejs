@@ -190,7 +190,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 | `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失或解析失败时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置） |
 | `.env` | 否 | `Config.getEnv(key)` 补充来源；系统环境变量优先，文件缺失静默忽略 |
 | `dev.config.json` | 否 | **存在即开发环境**：日志全级别、`getConfig` 走 dev 覆盖链 |
-| `CA/cacert.pem` | 否 | HTTPS 自定义 CA；文件缺失时回退系统 CA |
+| `CA/cacert.pem` | 否 | HTTPS 自定义 CA；**公共站点无需配置**（Node 自带根 CA 且默认校验证书链），文件缺失时回退系统 CA；`ca` 为替换语义，只放需额外信任的私有 CA |
 | `log/` | 否 | 自动创建；`app-YYYY-MM-DD.log`，保留最近 3 天 |
 
 ## 日志等级与配置隔离
@@ -225,7 +225,10 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
 2. **`Logger.logDir`**：默认值改为惰性解析（`Config.resolveFromRoot('log')`），
    因此在 `Config.setRootDir()` 之后导入或使用也生效；显式赋值仍可重定向。
 3. **`HttpClient` CA**：新增 `HttpClient.caFilePath`（默认宿主根下 `CA/cacert.pem`）；
-   证书文件缺失时回退系统 CA，不再抛 `ENOENT`；`closeAgents()` 会重置 HTTPS Agent 与 CA 缓存。
+   证书文件缺失时回退系统 CA，不再抛 `ENOENT`；改 `caFilePath` 会在下次 HTTPS 请求时
+   自动重新加载并重建 Agent（无需手动 `closeAgents()`）；同一路径下替换证书内容仍需
+   `closeAgents()`。注意 `https.Agent` 的 `ca` 是**替换**内置根证书列表而非追加，
+   该文件只应放需要额外信任的私有 CA（公共站点无需配置）。
 4. **内部引用**：库内一律相对路径（`./config.js`）；对外提供子路径导出与 `#YukiLib/*` 别名。
 5. **JSON BOM 容忍**：`config.json` / `dev.config.json` 行首 UTF-8 BOM 会被剥离
    （Windows 记事本、PowerShell 5.1 写出的文件常带 BOM，原实现会静默解析失败、取值全为 `false`）。
@@ -293,6 +296,22 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
 | 处理器签名 `(ctx) => ...` | `(params, ctx) => ...`（路径参数已按类型转换） |
 | 宿主 `server.js`（handleRequest / createAppServer） | `HttpServer.create({ router, serviceName }).listen(...)` |
 | `#YukiLib/appError` | `#YukiLib/httpServer/appError`（类名不变） |
+
+## 出站 HTTPS 与 CA
+
+Node.js 默认**自动校验证书链**，并在二进制中内置 Mozilla 根 CA 列表，因此访问公共
+HTTPS 站点**不需要**自带 CA 文件，本库不配置 `CA/cacert.pem` 时即走系统 CA。只有目标
+站点使用**私有 / 自签名 CA**（内网服务、自建网关、抓包代理根证书）时才需要提供：
+
+```js
+HttpClient.caFilePath = '/etc/ssl/private-ca.pem';  // 下次 HTTPS 请求即生效
+```
+
+三个容易踩的点：
+
+- `https.Agent` 的 `ca` 是**替换**内置根证书列表，不是追加——该文件只放需要额外信任的私有 CA；
+- 若想"追加"而非替换，用环境变量 `NODE_EXTRA_CA_CERTS=<path>`（Node 启动时读取）；
+- **同一路径下替换了证书内容**需 `HttpClient.closeAgents()` 才会重新读取（换路径则自动重载）。
 
 ## 验收
 

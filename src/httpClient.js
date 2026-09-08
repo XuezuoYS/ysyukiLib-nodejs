@@ -34,7 +34,9 @@ import { Config } from './config.js';
  * - 响应头键名为小写（node 规范）；
  * - 响应体按 UTF-8 解码为字符串；
  * - 自定义 CA 文件缺失时回退系统 CA（通用库不因宿主缺少 CA 文件而失败）；
- *   自定义 CA 路径可用 HttpClient.caFilePath 重定向；
+ *   自定义 CA 路径可用 HttpClient.caFilePath 重定向，赋值后下次 HTTPS 请求即生效；
+ *   注意 `https.Agent` 的 `ca` 是**替换**内置根证书列表而非追加——只有确实需要
+ *   信任私有 CA 时才配置该文件；同一路径下替换证书内容需 `closeAgents()` 重新读取。
  * - 响应体默认全量缓冲；`HttpClient.maxBodyMb` 可设置单个响应体大小上限（MB，0 为无限制），
  *   超限抛 `HTTP Request Failed: 响应体过大（上限 N MB）`。
  *
@@ -58,10 +60,13 @@ const MAX_REDIRECTS = 10;
 let caCertPem = null;
 
 /**
- * 自定义 CA 是否已尝试加载
- * @type {boolean}
+ * 已加载 CA 的路径（null 表示尚未加载）
+ *
+ * 缓存键：`HttpClient.caFilePath` 变更时据此判定需要重新加载，
+ * 避免"改了路径仍用旧证书/旧 Agent"。
+ * @type {string|null}
  */
-let isCaLoaded = false;
+let caLoadedPath = null;
 
 /**
  * 进程级连接复用 Agent（DNS/连接复用）
@@ -75,32 +80,50 @@ const agents = {
 /**
  * 加载自定义 CA 证书内容（缺失或不可读时返回 null，回退系统 CA）
  *
+ * @param {string} file 证书文件路径
  * @returns {string|null} PEM 内容，或 null
  */
-function loadCaCert() {
+function loadCaCert(file) {
     try {
-        return readFileSync(HttpClient.caFilePath, 'utf8');
+        return readFileSync(file, 'utf8');
     } catch {
         return null;
     }
 }
 
 /**
- * 获取启用自定义 CA 的 HTTPS Agent（懒创建）
+ * 按当前 caFilePath 加载 CA 并重建 HTTPS Agent
+ *
+ * 路径未变且已加载过时复用现有 Agent（连接可继续复用）；
+ * 路径变化则丢弃旧 Agent 并按新路径重新加载——否则改了 caFilePath
+ * 仍会沿用首次的证书，且调用方无从察觉。
+ *
+ * @returns {https.Agent} HTTPS Agent
+ */
+function reloadHttpsAgent() {
+    const file = HttpClient.caFilePath;
+    if (caLoadedPath === file && agents.https !== null) {
+        return agents.https;
+    }
+
+    if (agents.https !== null) {
+        agents.https.destroy();
+    }
+    caLoadedPath = file;
+    caCertPem = loadCaCert(file);
+    agents.https = caCertPem === null
+        ? new https.Agent({ keepAlive: true })
+        : new https.Agent({ keepAlive: true, ca: caCertPem });
+    return agents.https;
+}
+
+/**
+ * 获取启用自定义 CA 的 HTTPS Agent（懒创建；路径变化时自动重建）
  *
  * @returns {https.Agent} HTTPS Agent
  */
 function getHttpsAgent() {
-    if (agents.https === null) {
-        if (!isCaLoaded) {
-            caCertPem = loadCaCert();
-            isCaLoaded = true;
-        }
-        agents.https = caCertPem === null
-            ? new https.Agent({ keepAlive: true })
-            : new https.Agent({ keepAlive: true, ca: caCertPem });
-    }
-    return agents.https;
+    return reloadHttpsAgent();
 }
 
 /**
@@ -245,6 +268,11 @@ export class HttpClient {
 
     /**
      * 自定义 CA 证书路径（默认宿主项目根下 `CA/cacert.pem`，可显式赋值重定向）
+     *
+     * 赋值后下一次 HTTPS 请求即按新路径重新加载 CA 并重建 Agent，
+     * 无需再手动调用 `closeAgents()`；若只是**同一路径下替换了证书内容**，
+     * 仍需 `closeAgents()` 才会重新读取。
+     *
      * @returns {string} 证书文件绝对路径
      */
     static get caFilePath() {
@@ -256,6 +284,13 @@ export class HttpClient {
      */
     static set caFilePath(file) {
         HttpClient.#caFilePath = file === null ? null : String(file);
+        // 丢弃旧 CA 与 Agent：下次请求按新路径重新加载（Agent 懒重建）
+        caCertPem = null;
+        caLoadedPath = null;
+        if (agents.https !== null) {
+            agents.https.destroy();
+            agents.https = null;
+        }
     }
 
     /**
@@ -503,7 +538,9 @@ export class HttpClient {
     /**
      * 释放进程级连接复用 Agent（优雅退出/测试收尾时调用）
      *
-     * HTTPS Agent 与 CA 缓存一并重置，使宿主根变化后重新解析 CA。
+     * HTTPS Agent 与 CA 缓存一并重置：宿主根变化、或**同一路径下证书内容被替换**后，
+     * 下次请求会重新读取证书文件。仅改 `HttpClient.caFilePath` 无需调用本方法
+     * （赋值时已自动失效）。
      *
      * @returns {void}
      */
@@ -514,6 +551,6 @@ export class HttpClient {
         }
         agents.https = null;
         caCertPem = null;
-        isCaLoaded = false;
+        caLoadedPath = null;
     }
 }

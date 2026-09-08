@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import https from 'node:https';
 import { after, afterEach, before, describe, it } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -297,6 +298,30 @@ describe('HttpClient：响应体大小上限', () => {
 });
 
 describe('HttpClient：自定义 CA', () => {
+    /**
+     * 抓取下一次 HTTPS 请求实际使用的 Agent
+     *
+     * 通过临时替换 https.request 读取 options.agent，避免依赖库内部实现细节。
+     *
+     * @param {() => Promise<any>} fn 触发请求的异步函数
+     * @returns {Promise<any>} 该请求使用的 agent
+     */
+    async function captureAgent(fn) {
+        const original = https.request;
+        /** @type {any} */
+        let captured;
+        https.request = function patched(options, ...rest) {
+            captured = options.agent;
+            return original.call(this, options, ...rest);
+        };
+        try {
+            await fn();
+        } finally {
+            https.request = original;
+        }
+        return captured;
+    }
+
     it('caFilePath：默认为宿主根下 CA/cacert.pem，可显式重定向', () => {
         const root = Config.getRootDir();
         assert.equal(HttpClient.caFilePath, Config.resolveFromRoot('CA', 'cacert.pem'));
@@ -307,6 +332,55 @@ describe('HttpClient：自定义 CA', () => {
             HttpClient.caFilePath = null;
         }
         assert.equal(HttpClient.caFilePath, Config.resolveFromRoot('CA', 'cacert.pem'));
+    });
+
+    it('改 caFilePath 即重建 HTTPS Agent，无需手动 closeAgents', async () => {
+        const caDir = mkdtempSync(join(tmpdir(), 'ysyuki-ca-'));
+        const pemA = join(caDir, 'a.pem');
+        const pemB = join(caDir, 'b.pem');
+        writeFileSync(pemA, '-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----\n', 'utf8');
+        writeFileSync(pemB, '-----BEGIN CERTIFICATE-----\nB\n-----END CERTIFICATE-----\n', 'utf8');
+
+        const client = new HttpClient();
+        try {
+            HttpClient.caFilePath = pemA;
+            // 首次请求按 a.pem 建立 Agent（证书内容非法也无妨，请求本就失败）
+            const agentA = await captureAgent(() => assert.rejects(() => client.get('https://127.0.0.1:1/ca-a'), /HTTP Request Failed/));
+            assert.ok(agentA, '应捕获到 HTTPS Agent');
+
+            HttpClient.caFilePath = pemB; // 修复前：缓存命中旧路径，仍沿用 a.pem 的 Agent
+            const agentB = await captureAgent(() => assert.rejects(() => client.get('https://127.0.0.1:1/ca-b'), /HTTP Request Failed/));
+
+            assert.notEqual(agentB, agentA, '换 CA 路径后应重建 Agent');
+        } finally {
+            HttpClient.caFilePath = null;
+            HttpClient.closeAgents();
+            rmSync(caDir, { recursive: true, force: true });
+        }
+    });
+
+    it('同一路径下替换证书内容：需 closeAgents() 才会重新读取', async () => {
+        const caDir = mkdtempSync(join(tmpdir(), 'ysyuki-ca-same-'));
+        const pem = join(caDir, 'same.pem');
+        writeFileSync(pem, '-----BEGIN CERTIFICATE-----\nOLD\n-----END CERTIFICATE-----\n', 'utf8');
+
+        const client = new HttpClient();
+        try {
+            HttpClient.caFilePath = pem;
+            const before = await captureAgent(() => assert.rejects(() => client.get('https://127.0.0.1:1/same-a'), /HTTP Request Failed/));
+
+            writeFileSync(pem, '-----BEGIN CERTIFICATE-----\nNEW\n-----END CERTIFICATE-----\n', 'utf8');
+            const unchanged = await captureAgent(() => assert.rejects(() => client.get('https://127.0.0.1:1/same-b'), /HTTP Request Failed/));
+            assert.equal(unchanged, before, '路径未变时复用 Agent（不重新读文件）');
+
+            HttpClient.closeAgents();
+            const afterClose = await captureAgent(() => assert.rejects(() => client.get('https://127.0.0.1:1/same-c'), /HTTP Request Failed/));
+            assert.notEqual(afterClose, before, 'closeAgents 后按同一路径重新读取并重建');
+        } finally {
+            HttpClient.caFilePath = null;
+            HttpClient.closeAgents();
+            rmSync(caDir, { recursive: true, force: true });
+        }
     });
 
     it('宿主根无 CA 文件时回退系统 CA：不因证书文件缺失而抛 ENOENT', async () => {
