@@ -11,6 +11,13 @@ import { runWithContext } from '#YukiLib/httpServer/context';
  * @property {string[]} cookieLines 追加的 Set-Cookie 行
  * @property {boolean} ended 是否已结束响应
  * @property {string|undefined} body 传入 end() 的响应体
+ * @property {Record<string, Function[]>} listeners 事件监听（accessLog 依赖 finish）
+ * @property {(name: string, value: any) => void} setHeader 设置响应头
+ * @property {(name: string) => any} getHeader 读取响应头
+ * @property {(name: string, value: string) => void} appendHeader 追加响应头
+ * @property {(event: string, listener: Function) => void} on 注册事件监听
+ * @property {(event: string) => void} emit 触发事件
+ * @property {(chunk?: string) => void} end 结束响应
  */
 
 /**
@@ -69,7 +76,9 @@ export function makeResStub() {
                 this.headers[name] = this.cookieLines.length === 1 ? value : [...this.cookieLines];
                 return;
             }
-            this.headers[name] = value;
+            // 与 node ServerResponse 一致：非 Set-Cookie 头按 ', ' 追加而非覆盖
+            const previous = this.headers[name];
+            this.headers[name] = previous === undefined ? value : `${previous}, ${value}`;
         },
         /**
          * @param {string} [chunk] 响应体

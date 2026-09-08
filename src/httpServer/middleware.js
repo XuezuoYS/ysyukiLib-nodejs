@@ -14,10 +14,10 @@ import { ServerLogger } from './serverLogger.js';
  *
  * @typedef {(ctx: any, next: () => Promise<void>) => any} MiddlewareFn
  * @typedef {object} CorsOptions
- * @property {string} [origin] 允许的来源，默认 '*'
+ * @property {string} [origin] 允许的来源，默认 '*'（无凭证时的开放策略）
  * @property {string} [methods] 允许的方法
  * @property {string} [headers] 允许的请求头
- * @property {boolean} [credentials] 是否允许携带凭证（true 时按请求 Origin 回显）
+ * @property {boolean} [credentials] 是否允许携带凭证；为 true 时必须显式指定非 '*' 的 origin，否则构造时抛错
  * @property {number} [maxAge] 预检结果缓存秒数
  * @property {boolean} [preflight] 是否短路 OPTIONS 预检
  */
@@ -25,29 +25,32 @@ export class Middleware {
     /**
      * 跨域中间件
      *
+     * 默认 `origin: '*'`（不带凭证）。`credentials: true` 时必须显式指定非 `'*'` 的 origin，
+     * 否则构造中间件时抛 Error（启动期配置错误），避免"任意站点可携带凭证调用本 API"。
+     *
      * @param {CorsOptions} [options] 选项
      * @default options = {}
      * @returns {MiddlewareFn} 中间件
+     * @throws {Error} credentials 为 true 但未显式指定非 `'*'` 的 origin
      */
     static cors(options = {}) {
         const {
-            origin = '*',
             methods = 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS',
             headers = 'Content-Type, Authorization, X-Request-Id',
             credentials = false,
             maxAge = 86400,
             preflight = true,
         } = options;
+        const origin = options.origin === undefined || options.origin === '' ? '*' : options.origin;
+
+        if (credentials && origin === '*') {
+            throw new Error('credentials: true 时必须显式指定非 "*" 的 origin（避免任意站点携带凭证调用）');
+        }
 
         return async (ctx, next) => {
-            const requestOrigin = ctx.req.headers.origin;
-            const allowOrigin = credentials && origin === '*' && requestOrigin !== undefined
-                ? requestOrigin
-                : origin;
-
-            ctx.res.setHeader('Access-Control-Allow-Origin', allowOrigin);
-            if (allowOrigin !== '*') {
-                ctx.res.setHeader('Vary', 'Origin');
+            ctx.res.setHeader('Access-Control-Allow-Origin', origin);
+            if (origin !== '*') {
+                appendVary(ctx.res, 'Origin');
             }
             if (credentials) {
                 ctx.res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -95,4 +98,25 @@ export class Middleware {
             await next();
         };
     }
+}
+
+/**
+ * 追加 Vary 值（已含该维度时不重复，避免覆盖宿主/上游已设的 Vary）
+ *
+ * @param {import('node:http').ServerResponse} res 响应对象
+ * @param {string} value 变体维度（如 Origin）
+ */
+function appendVary(res, value) {
+    const current = res.getHeader('Vary');
+    const text = current === undefined
+        ? ''
+        : (Array.isArray(current) ? current.join(', ') : String(current));
+    if (text.split(',').some((item) => item.trim().toLowerCase() === value.toLowerCase())) {
+        return;
+    }
+    if (typeof res.appendHeader === 'function') {
+        res.appendHeader('Vary', value);
+        return;
+    }
+    res.setHeader('Vary', text === '' ? value : `${text}, ${value}`);
 }

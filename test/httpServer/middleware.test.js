@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
+import { AppError } from '#YukiLib/httpServer/appError';
 import { Middleware } from '#YukiLib/httpServer/middleware';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
@@ -50,6 +51,7 @@ describe('Middleware.cors', () => {
         assert.equal(called, true);
         assert.equal(res.headers['Access-Control-Allow-Origin'], '*');
         assert.equal(res.headers['Access-Control-Allow-Credentials'], undefined);
+        assert.equal(res.headers.Vary, undefined);
     });
 
     it('OPTIONS 预检：204 短路，处理器不执行，带方法/头/缓存头', async () => {
@@ -63,12 +65,42 @@ describe('Middleware.cors', () => {
         assert.equal(res.ended, true);
     });
 
-    it('credentials：按请求 Origin 回显并声明凭证许可', async () => {
-        const { ctx, res } = makeCase({ method: 'GET', headers: { origin: 'https://app.test' } });
-        await runChain(Middleware.cors({ credentials: true }), ctx);
+    it('credentials：须显式 origin，回显该 origin 并声明凭证许可', async () => {
+        const { ctx, res } = makeCase({ method: 'GET' });
+        await runChain(Middleware.cors({ credentials: true, origin: 'https://app.test' }), ctx);
         assert.equal(res.headers['Access-Control-Allow-Origin'], 'https://app.test');
         assert.equal(res.headers['Access-Control-Allow-Credentials'], 'true');
         assert.equal(res.headers.Vary, 'Origin');
+    });
+
+    it('credentials: true 但 origin 未指定 / 为空 / 为 "*"：构造时抛 Error', () => {
+        for (const options of [
+            { credentials: true },
+            { credentials: true, origin: '' },
+            { credentials: true, origin: '*' },
+        ]) {
+            assert.throws(
+                () => Middleware.cors(options),
+                (err) => err instanceof Error
+                    && !(err instanceof AppError)
+                    && err.message.includes('credentials: true 时必须显式指定非 "*" 的 origin'),
+                `应抛错：${JSON.stringify(options)}`,
+            );
+        }
+    });
+
+    it('Vary 追加而非覆盖：宿主已设的 Vary 保留', async () => {
+        const { ctx, res } = makeCase({ method: 'GET' });
+        res.setHeader('Vary', 'Accept-Encoding');
+        await runChain(Middleware.cors({ origin: 'https://a.test' }), ctx);
+        assert.equal(res.headers.Vary, 'Accept-Encoding, Origin');
+    });
+
+    it('Vary 已含 Origin（大小写不敏感）时不重复追加', async () => {
+        const { ctx, res } = makeCase({ method: 'GET' });
+        res.setHeader('Vary', 'origin');
+        await runChain(Middleware.cors({ origin: 'https://a.test' }), ctx);
+        assert.equal(res.headers.Vary, 'origin');
     });
 
     it('自定义 origin / methods / maxAge', async () => {

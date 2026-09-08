@@ -45,7 +45,7 @@ src/
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
 | `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志包装（请求级日志 / 访问日志 / 生命周期） |
 | `ysyuki-lib-on-nodejs/httpServer/router` | `Router` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由） |
-| `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId） |
+| `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId）；`cors` 默认 `origin: '*'`，`credentials: true` 须显式指定非 `'*'` 的 origin |
 | `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
 
 `ysyuki-lib-on-nodejs`（包根）导出以上全部 11 个类，等价于逐个从子路径导入；
