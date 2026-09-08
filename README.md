@@ -86,6 +86,26 @@ HttpServer.create({ router, serviceName: 'example-service' })
 响应与错误契约：JSON 输出 4 空格缩进、斜杠与非 ASCII 不转义；错误统一
 `{ "status": message }`；404 / 405 维持 `{ name, error, path, method }` 形状（405 附带 `Allow` 头）。
 
+请求体两种来源，**取值写法完全一致**：
+
+| `Content-Type` | 解析器 | `HttpReq.getPostData` 校验语义 |
+| --- | --- | --- |
+| `application/json`（或未声明） | `parseJsonBody` | 严格：`int` 要求 JSON 数字、`bool` 要求布尔值 |
+| `application/x-www-form-urlencoded` | `parseFormBody` | 字符串来源：`'42'` 可取 `int`、`'true'` 可取 `bool`（与 `getQuery` 一致） |
+
+```js
+router.post('/login', () => {
+    // 无论客户端发 JSON 还是表单，这一行都成立
+    const username = HttpReq.getPostData('username', 'string');
+    const remember = HttpReq.getPostData('remember', 'bool', false);
+    return { username, remember };
+});
+```
+
+表单同名键取**首个**值（与 `getQuery` 一致）；`getBody()` 在表单来源下返回字符串值对象，
+需要类型转换请用 `getPostData` 声明类型。空体/纯空白一律按空对象处理，非 JSON 且非表单的
+`Content-Type` 仍按 JSON 解析（非法即 400）。
+
 ## 接入
 
 ### 方式一：本地目录依赖（推荐，未发布时）
@@ -206,6 +226,17 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
    （`{path:path}` / `{rest:all}` 按段编码、保留斜杠），可用 `generate(name, params, { encode: false })` 关闭；
    新增 `encodeUrlParam(value, { keepSlash })` 供手工拼 URL 复用；`@` 自定义正则路由不再支持反向生成
    （此前会静默返回正则源字符串）。
+
+10. **表单请求体**（本次）：新增 `application/x-www-form-urlencoded` 解析（`parseFormBody`），
+    `HttpReq.getPostData` 按请求体来源选择校验语义（JSON 严格 / 表单字符串强转），调用写法不变；
+    此前表单请求会被当非法 JSON 直接 400。同名键取首值，与 `getQuery` 一致。
+
+11. **超限请求体与路径折叠**（本次）：请求体超限（413）后剩余数据会被读掉，keep-alive
+    连接可继续复用（此前复用会 ECONNRESET）；`normalizePath` 折叠两个及以上连续斜杠
+    （此前只折叠一次，`//a///b/` 会残留 `//`）。
+
+12. **兜底出口**（本次）：响应已开始后发生异常时 destroy 响应，客户端立即收到连接中断
+    （此前只记日志，客户端会一直等到 `requestTimeout`）。
 
 ## 从旧 API 迁移（宿主改造用）
 

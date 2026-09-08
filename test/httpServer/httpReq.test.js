@@ -105,6 +105,34 @@ describe('HttpReq.getPostData 请求体取值', () => {
             assert.throws(() => HttpReq.getPostData('v', 'none'), AppError);
         });
     });
+
+    it('表单来源（bodySource: form）：按字符串来源强转，调用写法与 JSON 一致', () => {
+        const formBody = { uid: '42', ratio: '1.5', flag: 'true', off: '0', name: 'x', empty: '' };
+        runIn(makeCtx({ body: formBody, bodySource: 'form' }), () => {
+            assert.equal(HttpReq.getPostData('uid', 'int'), 42);
+            assert.equal(HttpReq.getPostData('ratio', 'float'), 1.5);
+            assert.equal(HttpReq.getPostData('flag', 'bool'), true);
+            assert.equal(HttpReq.getPostData('off', 'bool'), false);
+            assert.equal(HttpReq.getPostData('name', 'string'), 'x');
+            assert.equal(HttpReq.getPostData('empty', 'string'), '');
+            assert.equal(HttpReq.getPostData('missing', 'int', 7), 7);
+            // 表单来源是字符串来源：string 原样返回，无法判定的布尔取值仍抛 400
+            assert.equal(HttpReq.getPostData('uid', 'string'), '42');
+            assert.throws(
+                () => HttpReq.getPostData('uid', 'bool'),
+                (err) => err instanceof AppError && err.statusCode === 400,
+            );
+        });
+    });
+
+    it('同一份字符串值：JSON 来源严格校验、表单来源强转（来源决定语义）', () => {
+        runIn(makeCtx({ body: { uid: '42' }, bodySource: 'json' }), () => {
+            assert.throws(() => HttpReq.getPostData('uid', 'int'), AppError);
+        });
+        runIn(makeCtx({ body: { uid: '42' }, bodySource: 'form' }), () => {
+            assert.equal(HttpReq.getPostData('uid', 'int'), 42);
+        });
+    });
 });
 
 describe('HttpReq.getQuery 查询串取值', () => {

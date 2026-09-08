@@ -22,6 +22,11 @@ import { getCurrentContext } from './context.js';
  * 路径参数还会被 Router 预先按模板类型转换（int / float → number，bool → boolean），
  * getParam 在已转换值之上再校验一次，两种来源写法一致。
  *
+ * `application/x-www-form-urlencoded` 请求体同样是字符串来源（见 `parseFormBody`），
+ * 因此 `getPostData` 按 bodySource 选择语义：JSON 体走严格校验（数字必须是数字），
+ * 表单体走字符串强转（`'42'` 可取 int、`'true'` 可取 bool）。
+ * 两种请求体的调用写法完全一致：`HttpReq.getPostData('page', 'int', 1)`。
+ *
  * 常用函数：
  * - getPostData(name, type, default?)：请求体取值
  * - getQuery(name, type, default?)：查询串取值
@@ -33,6 +38,10 @@ import { getCurrentContext } from './context.js';
 export class HttpReq {
     /**
      * 获取请求体数据项
+     *
+     * 校验语义随请求体来源（ctx.bodySource）：
+     * JSON 体为严格校验；`application/x-www-form-urlencoded` 体为字符串强转，
+     * 调用方无需区分来源，写法一致。
      *
      * @param {string} name 字段名
      * @param {string} [type] 类型，none 则不校验
@@ -46,7 +55,8 @@ export class HttpReq {
         const exists = body !== null && typeof body === 'object'
             && Object.prototype.hasOwnProperty.call(body, name)
             && body[name] !== null;
-        return readField(exists, exists ? body[name] : undefined, type, rest, 'strict');
+        const source = ctx.bodySource === 'form' ? 'string' : 'strict';
+        return readField(exists, exists ? body[name] : undefined, type, rest, source);
     }
 
     /**

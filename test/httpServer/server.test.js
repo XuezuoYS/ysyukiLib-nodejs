@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 
 import { AppError } from '#YukiLib/httpServer/appError';
 import { HttpReq } from '#YukiLib/httpServer/httpReq';
-import { HttpServer, normalizePath } from '#YukiLib/httpServer/server';
+import { HttpServer, normalizePath, parseFormBody } from '#YukiLib/httpServer/server';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Logger } from '#YukiLib/logger';
 import { Router } from '#YukiLib/httpServer/router';
@@ -218,6 +218,112 @@ describe('HttpServer：请求体解析与上限', () => {
         } finally {
             agent.destroy();
         }
+    });
+});
+
+describe('HttpServer：application/x-www-form-urlencoded 请求体', () => {
+    /** 发一个表单编码 POST */
+    const postForm = (url, body) => fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+    });
+
+    it('parseFormBody：值与 JSON 同形（+ 即空格、百分号解码、同名键取首值）', () => {
+        assert.deepEqual(parseFormBody(''), {});
+        assert.deepEqual(parseFormBody('   '), {});
+        assert.deepEqual(parseFormBody('a=1&b=x+y'), { a: '1', b: 'x y' });
+        assert.deepEqual(parseFormBody('n=%E4%B8%AD%E6%96%87'), { n: '中文' });
+        assert.deepEqual(parseFormBody('a=1&a=2'), { a: '1' }, '同名键取首值（与 getQuery 一致）');
+        assert.deepEqual(parseFormBody('flag'), { flag: '' }, '无 = 的片段按空串收录');
+        assert.deepEqual(parseFormBody('a=%ZZ'), { a: '%ZZ' }, '非法百分号编码原样保留，不抛错');
+        assert.deepEqual(parseFormBody('empty='), { empty: '' });
+    });
+
+    it('同一处理器：表单与 JSON 两种请求体取值结果一致', async () => {
+        const base = await startServer((router) => {
+            router.post('/submit', () => ({
+                username: HttpReq.getPostData('username', 'string'),
+                remember: HttpReq.getPostData('remember', 'bool'),
+                page: HttpReq.getPostData('page', 'int'),
+                ratio: HttpReq.getPostData('ratio', 'float'),
+                missing: HttpReq.getPostData('missing', 'string', 'default'),
+            }));
+        });
+
+        const expected = {
+            username: 'neo',
+            remember: true,
+            page: 3,
+            ratio: 1.5,
+            missing: 'default',
+        };
+        assert.deepEqual(await (await postForm(`${base}/submit`, 'username=neo&remember=true&page=3&ratio=1.5')).json(), expected);
+
+        const jsonRes = await postJson(`${base}/submit`, {
+            username: 'neo', remember: true, page: 3, ratio: 1.5,
+        });
+        assert.deepEqual(JSON.parse(jsonRes.text), expected);
+    });
+
+    it('表单体按字符串来源校验：类型不符抛 400（与 query 语义一致）', async () => {
+        const base = await startServer((router) => {
+            router.post('/int', () => ({ v: HttpReq.getPostData('v', 'int') }));
+            router.post('/bool', () => ({ v: HttpReq.getPostData('v', 'bool') }));
+            router.post('/array', () => ({ v: HttpReq.getPostData('v', 'array') }));
+        });
+
+        for (const [path, body, type] of [['/int', 'v=abc', 'int'], ['/int', 'v=1.5', 'int'], ['/bool', 'v=yes', 'bool'], ['/array', 'v=a&v=b', 'array']]) {
+            const res = await postForm(`${base}${path}`, body);
+            assert.equal(res.status, 400, `${path}?${body} 应 400`);
+            assert.deepEqual(await res.json(), { status: `类型错误，需要的类型：${type}` });
+        }
+    });
+
+    it('Content-Type 带 charset 参数同样按表单解析', async () => {
+        const base = await startServer((router) => {
+            router.post('/x', () => ({ v: HttpReq.getPostData('v', 'int') }));
+        });
+        const res = await fetch(`${base}/x`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: 'v=7',
+        });
+        assert.equal(res.status, 200);
+        assert.deepEqual(await res.json(), { v: 7 });
+    });
+
+    it('表单体 + 查询串：两种来源各自独立取值', async () => {
+        const base = await startServer((router) => {
+            router.post('/mix', () => ({
+                fromBody: HttpReq.getPostData('page', 'int'),
+                fromQuery: HttpReq.getQuery('page', 'int'),
+            }));
+        });
+        const res = await postForm(`${base}/mix?page=9`, 'page=3');
+        assert.deepEqual(await res.json(), { fromBody: 3, fromQuery: 9 });
+    });
+
+    it('非表单 Content-Type 仍按 JSON 解析：非法 JSON 400', async () => {
+        const base = await startServer((router) => {
+            router.post('/x', () => ({ ok: true }));
+        });
+        const res = await fetch(`${base}/x`, {
+            method: 'POST',
+            headers: { 'content-type': 'text/plain' },
+            body: 'a=1',
+        });
+        assert.equal(res.status, 400);
+        assert.deepEqual(await res.json(), { status: '参数错误' });
+    });
+
+    it('表单体同样受 bodyLimit 约束', async () => {
+        const base = await startServer((router) => {
+            router.post('/x', () => ({ ok: true }));
+        }, { bodyLimit: 32 });
+        const res = await postForm(`${base}/x`, `big=${'x'.repeat(200)}`);
+        assert.equal(res.status, 413);
+        assert.deepEqual(await res.json(), { status: '请求体过大' });
     });
 });
 

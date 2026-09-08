@@ -14,6 +14,8 @@ import { ServerLogger } from './serverLogger.js';
  * 职责：
  * 1. 建立请求上下文（AsyncLocalStorage），使 HttpReq / HttpRes 一行式可用；
  * 2. 解析请求体（大小上限 + 非法 JSON 直接 400）；
+ *    按 Content-Type 选择解析器：`application/x-www-form-urlencoded` 走 parseFormBody，
+ *    其余（含缺失）走 parseJsonBody；两者都只产出普通对象，HttpReq.getPostData 写法一致；
  * 3. 路由匹配与中间件洋葱（全局 + 分组 + 路由级 + 处理器）；
  * 4. 唯一兜底出口，共五条分支：
  *    - 404 未命中：`{name, error: '404 not found', path, method}`；
@@ -136,6 +138,49 @@ export function parseJsonBody(rawBody) {
     }
 
     return decoded !== null && typeof decoded === 'object' ? decoded : {};
+}
+
+/**
+ * 解析 `application/x-www-form-urlencoded` 请求体
+ *
+ * 与 `URLSearchParams` 同语义（`+` 视作空格、百分号解码、非法编码原样保留，不抛错）：
+ * 同名键取**首个**值（与 `HttpReq.getQuery` 的取值语义一致，避免同一键在两种来源下行为分叉）；
+ * 空体/纯空白：空对象；无 `=` 的片段（如 `flag`）按空串值收录。
+ *
+ * 值一律保持字符串：类型转换交给 `HttpReq.getPostData` 按调用方声明的类型完成，
+ * 这样 `getPostData('page', 'int')` 在 form 与 JSON 两种来源下写法一致。
+ *
+ * @param {string} rawBody 请求体原文
+ * @returns {Record<string, string>} 已解析请求体（值均为字符串）
+ */
+export function parseFormBody(rawBody) {
+    if (rawBody.trim() === '') {
+        return {};
+    }
+
+    /** @type {Record<string, string>} */
+    const body = {};
+    for (const [key, value] of new URLSearchParams(rawBody)) {
+        if (!Object.prototype.hasOwnProperty.call(body, key)) {
+            body[key] = value;
+        }
+    }
+    return body;
+}
+
+/**
+ * 判断 Content-Type 是否为 `application/x-www-form-urlencoded`（忽略大小写与参数）
+ *
+ * @param {string|string[]|undefined} contentType Content-Type 头原文
+ * @returns {boolean} 是否表单编码
+ */
+function isFormContentType(contentType) {
+    const raw = Array.isArray(contentType) ? contentType[0] : contentType;
+    if (typeof raw !== 'string') {
+        return false;
+    }
+    const mime = raw.split(';')[0].trim().toLowerCase();
+    return mime === 'application/x-www-form-urlencoded';
 }
 
 export class HttpServer {
@@ -395,6 +440,7 @@ export class HttpServer {
         }
 
         const requestId = headerValue(req.headers['x-request-id']) || randomUUID();
+        const isForm = isFormContentType(req.headers['content-type']);
         /** @type {import('./context.js').HttpContext} */
         const ctx = {
             req,
@@ -404,6 +450,7 @@ export class HttpServer {
             params: {},
             query,
             body: {},
+            bodySource: isForm ? 'form' : 'json',
             rawBody: '',
             requestId,
             state: {},
@@ -413,7 +460,7 @@ export class HttpServer {
 
         try {
             ctx.rawBody = await this.#readBody(req, method);
-            ctx.body = parseJsonBody(ctx.rawBody);
+            ctx.body = isForm ? parseFormBody(ctx.rawBody) : parseJsonBody(ctx.rawBody);
 
             const match = this.#options.router.match(path, method);
             if (match.status === 'notFound') {

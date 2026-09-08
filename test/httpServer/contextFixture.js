@@ -126,6 +126,7 @@ export function makeReqStub(options = {}) {
  * @param {Record<string, string|number|boolean>} [options.params] 路径参数
  * @param {Record<string, string>} [options.query] 查询参数
  * @param {Record<string, any>} [options.body] 已解析请求体
+ * @param {'json'|'form'} [options.bodySource] 请求体来源（决定 getPostData 校验语义）
  * @param {string} [options.rawBody] 请求体原文
  * @param {Record<string, any>} [options.headers] 请求头
  * @param {string} [options.requestId] 请求标识
@@ -139,6 +140,7 @@ export function makeCtx(options = {}) {
         params = {},
         query = {},
         body = {},
+        bodySource = 'json',
         rawBody = '',
         headers = {},
         requestId = 'req-test-1',
@@ -152,6 +154,7 @@ export function makeCtx(options = {}) {
         params,
         query: new URLSearchParams(query),
         body,
+        bodySource,
         rawBody,
         requestId,
         state: {},

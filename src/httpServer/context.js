@@ -1,6 +1,16 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
+ * 请求体来源（决定 HttpReq.getPostData 的类型校验语义）
+ *
+ * - `json`：请求体来自 JSON 解析，值保持原始类型（数字/布尔/字符串/结构），严格校验；
+ * - `form`：请求体来自 `application/x-www-form-urlencoded`，值天然是字符串，
+ *   按字符串来源语义校验（int / float / bool 允许强转），与 query / param 一致。
+ *
+ * @typedef {'json'|'form'} HttpBodySource
+ */
+
+/**
  * 入站 HTTP 请求上下文（AsyncLocalStorage 承载）
  *
  * 一行式门面 HttpReq / HttpRes 经本模块读取"当前请求"，
@@ -21,6 +31,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * @property {Record<string, string|number|boolean>} params 路径参数（按模板类型转换）
  * @property {URLSearchParams} query 查询参数
  * @property {Record<string, any>} body 请求体（已解析；空体/无体为空对象）
+ * @property {HttpBodySource} bodySource 请求体来源（内部使用，决定取值校验语义）
  * @property {string} rawBody 请求体原始文本
  * @property {string} requestId 请求标识（日志与排障关联用）
  * @property {Record<string, any>} state 中间件共享状态（约定键名，避免互踩）
