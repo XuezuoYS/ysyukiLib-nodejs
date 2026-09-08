@@ -53,6 +53,12 @@ before(async () => {
                 res.end();
                 return;
             }
+            if (url.pathname === '/to-https') {
+                // 跨协议重定向：指向同一端口的 https 地址（该端口实际只提供明文 HTTP）
+                res.writeHead(302, { Location: `https://127.0.0.1:${port}/echo` });
+                res.end();
+                return;
+            }
             if (url.pathname === '/loop') {
                 res.writeHead(302, { Location: '/loop' });
                 res.end();
@@ -183,6 +189,17 @@ describe('HttpClient：重定向', () => {
         const res = await client.get(`${baseUrl()}/loop`);
         assert.equal(res.status, 302);
         assert.equal(res.rawInfo.num_redirects, 10);
+    });
+
+    it('跨协议重定向：按目标 URL 的协议发送（http→https 走 TLS 而非明文）', async () => {
+        const client = new HttpClient();
+        // 目标被当作 HTTPS 处理：对只提供明文 HTTP 的端口做 TLS 握手，必然失败；
+        // 若仍沿用初始 http 判定，则会拿到 200，本用例即失败
+        await assert.rejects(
+            () => client.get(`${baseUrl()}/to-https`),
+            (err) => err instanceof Error && err.message.startsWith('HTTP Request Failed:'),
+        );
+        assert.equal(client.ssl, true);
     });
 });
 

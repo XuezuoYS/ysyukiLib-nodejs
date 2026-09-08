@@ -24,7 +24,8 @@ import { Config } from './config.js';
  * 行为约定（既定契约）：
  * - `requireHttp(method, url, headers, data)` 返回 `{ status, headers, body, rawInfo }`；
  * - 无协议前缀的 URL 自动补 `http://`（safeUrl）；
- * - 3xx 自动重定向（上限 10 次，自动 Referer；POST 遇 301/302/303 转 GET 并丢弃请求体，307/308 保持方法）；
+ * - 3xx 自动重定向（上限 10 次，自动 Referer；协议按每一跳的 URL 重新判定，可跨 http/https；
+ *   POST 遇 301/302/303 转 GET 并丢弃请求体，307/308 保持方法）；
  * - 总超时 60s、连接超时 20s；
  * - 请求结束后清空累积请求头（实例默认头不跨请求保留）；
  * - headers 为 null 时使用 headerAdd 累积的实例头；数字键（或数组项）按原始 "Name: value" 行解析。
@@ -204,7 +205,8 @@ export class HttpClient {
     headers = {};
 
     /**
-     * 最近一次请求是否为 SSL（保留原实现的实例状态字段，随每次请求更新）
+     * 最近一次请求是否为 SSL（保留原实现的实例状态字段，随每一跳更新；
+     * 重定向跨协议时以最后一跳为准）
      * @type {boolean}
      */
     ssl = false;
@@ -298,7 +300,6 @@ export class HttpClient {
             headers = this.headers;
         }
         url = this.safeUrl(url);
-        const isSSL = this.isSSL(url);
         this.url = url;
 
         if (headers !== null) {
@@ -324,7 +325,10 @@ export class HttpClient {
             let finalUrl = target.href;
 
             for (;;) {
-                response = await requestOnce(currentMethod, target, outbound, currentBody, isSSL, controller.signal);
+                // 协议按每一跳的 URL 判定：重定向可跨 http/https，不能沿用初始 URL 的判定
+                const hopIsSSL = target.protocol === 'https:';
+                this.ssl = hopIsSSL;
+                response = await requestOnce(currentMethod, target, outbound, currentBody, hopIsSSL, controller.signal);
                 finalUrl = target.href;
 
                 const status = response.status;
