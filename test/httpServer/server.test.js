@@ -255,6 +255,33 @@ describe('HttpServer：兜底分支', () => {
         assert.match(captured[0].message, /Cookie 名非法/);
     });
 
+    it('响应已开始后异常：终结响应，客户端不挂起，onError 被调用', async () => {
+        /** @type {any[]} */
+        const captured = [];
+        const base = await startServer((router) => {
+            router.get('/partial', (params, ctx) => {
+                ctx.res.writeHead(200, { 'content-type': 'text/plain' });
+                ctx.res.write('partial');          // 已开始写出
+                throw new Error('写出到一半失败');  // 此时无法再改状态码
+            });
+        }, { onError: (err) => captured.push(err) });
+
+        // 修复前：兜底分支只记日志不终结响应，客户端会一直等到 requestTimeout
+        const settled = await Promise.race([
+            fetch(`${base}/partial`).then(
+                (res) => res.text().then(
+                    () => 'text-ok',
+                    () => 'body-error',
+                ),
+                () => 'fetch-error',
+            ),
+            new Promise((resolve) => setTimeout(() => resolve('timeout'), 3000)),
+        ]);
+        assert.notEqual(settled, 'timeout', '客户端不应挂起等待永不结束的响应');
+        assert.equal(captured.length, 1);
+        assert.match(captured[0].message, /写出到一半失败/);
+    });
+
     it('处理器无输出：补空 200（无 Content-Type）', async () => {
         const base = await startServer((router) => {
             router.get('/empty', () => {});

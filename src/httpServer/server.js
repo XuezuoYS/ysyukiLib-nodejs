@@ -20,7 +20,8 @@ import { ServerLogger } from './serverLogger.js';
  *    - 405 方法不符：同形状 `{name, error: '405 method not allowed', path, method}` + `Allow` 头；
  *    - AppError：`{status: message}`，状态码取 `statusCode`；
  *    - 未捕获异常：记 error 日志（堆栈只进日志），输出 500 `{status: '服务器内部错误'}`；
- *    - 响应已开始后发生异常：只记日志，不重复写出。
+ *    - 响应已开始后发生异常：只记日志，并 destroy 响应（客户端立即收到连接中断，
+ *      不会挂起等待；状态码已无法改动）。
  * 5. 超时与优雅关闭：SIGINT/SIGTERM 由**进程级共享注册表**统一处理（每进程只装一组监听器，
  *    listen 时注册、close 时注销），一次信号关闭全部已注册实例；到 shutdownTimeout 强制断开
  *    剩余连接；仅当所有已注册实例 exitOnShutdown 均为 true 时才结束进程（默认 false，交回宿主）。
@@ -519,6 +520,11 @@ export class HttpServer {
 
         if (ctx.res.headersSent || ctx.res.writableEnded) {
             ctx.logger.error('响应已开始后发生异常', { err });
+            // 响应头已发出，无法再改成 500；但必须终结这条响应：
+            // 只 return 会让客户端一直等一个永远不会到来的结尾（实测挂起不返回），
+            // 同时连接与并发槽位被长期占用。destroy() 会让客户端立即收到截断/连接中断，
+            // 明确知道请求失败，而不是无限等待。
+            ctx.res.destroy();
             return;
         }
 

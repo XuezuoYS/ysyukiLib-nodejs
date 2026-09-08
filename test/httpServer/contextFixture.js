@@ -10,6 +10,7 @@ import { runWithContext } from '#YukiLib/httpServer/context';
  * @property {Record<string, any>} headers 按写出顺序记录的响应头
  * @property {string[]} cookieLines 追加的 Set-Cookie 行
  * @property {boolean} ended 是否已结束响应
+ * @property {boolean} destroyed 是否已被强制断开（响应已开始后异常的兜底分支）
  * @property {string|undefined} body 传入 end() 的响应体
  * @property {Record<string, Function[]>} listeners 事件监听（accessLog 依赖 finish）
  * @property {(name: string, value: any) => void} setHeader 设置响应头
@@ -17,6 +18,7 @@ import { runWithContext } from '#YukiLib/httpServer/context';
  * @property {(name: string, value: string) => void} appendHeader 追加响应头
  * @property {(event: string, listener: Function) => void} on 注册事件监听
  * @property {(event: string) => void} emit 触发事件
+ * @property {() => void} destroy 强制断开响应
  * @property {(chunk?: string) => void} end 结束响应
  */
 
@@ -33,6 +35,7 @@ export function makeResStub() {
         /** @type {string[]} */
         cookieLines: [],
         ended: false,
+        destroyed: false,
         /** @type {string|undefined} */
         body: undefined,
         /** @type {Record<string, Function[]>} 事件监听（accessLog 依赖 finish） */
@@ -79,6 +82,12 @@ export function makeResStub() {
             // 与 node ServerResponse 一致：非 Set-Cookie 头按 ', ' 追加而非覆盖
             const previous = this.headers[name];
             this.headers[name] = previous === undefined ? value : `${previous}, ${value}`;
+        },
+        /**
+         * 强制断开响应（响应已开始后异常的兜底分支依赖）
+         */
+        destroy() {
+            this.destroyed = true;
         },
         /**
          * @param {string} [chunk] 响应体
