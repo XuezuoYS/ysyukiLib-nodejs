@@ -12,13 +12,13 @@ import { Logger as AliasLogger } from '#YukiLib/logger';
  * 同时验证宿主项目可沿用的两种写法：
  * - 子路径：`import { Config } from 'ysyuki-lib-on-nodejs/config'`
  * - 别名：宿主 package.json 的 imports 把 `#YukiLib/*` 映射到本包子路径后，
- *   既有 `import { Config } from '#YukiLib/config'` 写法无需改动。
+ *   `import { Config } from '#YukiLib/config'` 写法成立。
  */
 describe('包入口与子路径导出', () => {
-    it('barrel 导出全部 7 个类', () => {
+    it('barrel 导出全部 11 个类', () => {
         assert.deepEqual(
             Object.keys(barrel).sort(),
-            ['AppError', 'Config', 'FuncResult', 'HttpClient', 'Logger', 'RequestJson', 'Router'],
+            ['AppError', 'Config', 'FuncResult', 'HttpClient', 'HttpReq', 'HttpServer', 'JsonRes', 'Logger', 'Middleware', 'Router', 'ServerLogger'],
         );
     });
 
@@ -31,7 +31,7 @@ describe('包入口与子路径导出', () => {
         assert.equal(AliasConfig, Config);
     });
 
-    it('所有导出均为可实例化/可调用的类', () => {
+    it('所有导出均为可调用的类', () => {
         for (const [name, value] of Object.entries(barrel)) {
             assert.equal(typeof value, 'function', `${name} 应为类`);
         }
@@ -39,6 +39,10 @@ describe('包入口与子路径导出', () => {
         assert.ok(barrel.FuncResult.ok() instanceof barrel.FuncResult);
         assert.ok(new barrel.HttpClient() instanceof barrel.HttpClient);
         assert.ok(new barrel.AppError('x') instanceof barrel.AppError);
-        assert.ok(new barrel.RequestJson(null) instanceof barrel.RequestJson);
+        assert.equal(typeof barrel.HttpReq.getPostData, 'function');
+        assert.equal(typeof barrel.HttpServer.create, 'function');
+        assert.equal(typeof barrel.JsonRes.json, 'function');
+        assert.equal(typeof barrel.Middleware.cors, 'function');
+        assert.equal(typeof barrel.ServerLogger.access, 'function');
     });
 });

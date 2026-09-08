@@ -7,13 +7,17 @@
  * 源码按域组织，本文件是唯一聚合点：
  * - 基础设施：Config（宿主根 / .env / config.json）、Logger（结构化日志）
  * - 出站 HTTP：HttpClient
- * - 入站 HTTP 服务端：httpServer/（AppError、RequestJson、Router）
+ * - 入站 HTTP 服务端：httpServer/（HttpServer、Router、HttpReq、JsonRes、ServerLogger、AppError）
  * - 值对象：FuncResult
  */
 export { AppError } from './httpServer/appError.js';
 export { Config } from './config.js';
 export { FuncResult } from './funcResult.js';
 export { HttpClient } from './httpClient.js';
+export { HttpReq } from './httpServer/httpReq.js';
+export { HttpServer } from './httpServer/server.js';
+export { JsonRes } from './httpServer/jsonRes.js';
 export { Logger } from './logger.js';
-export { RequestJson } from './httpServer/requestJson.js';
+export { Middleware } from './httpServer/middleware.js';
 export { Router } from './httpServer/router.js';
+export { ServerLogger } from './httpServer/serverLogger.js';

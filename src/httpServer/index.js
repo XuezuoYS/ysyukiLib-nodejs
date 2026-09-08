@@ -1,10 +1,13 @@
 /**
  * 入站 HTTP 服务端子域入口（barrel）
  *
- * 聚合服务端处理三件套，三者共同支撑"宿主应用入口 + 唯一兜底出口"契约：
- * - AppError：业务可预期错误（宿主应用入口兜底出口的契约类型）；
- * - RequestJson：请求体取值与统一 JSON 响应出口；
- * - Router：薄路由（占位符、可选段、反向路由）。
+ * 轻量 FastAPI 风格服务端框架：
+ * - HttpServer：服务入口（create / listen / 兜底出口 / 优雅关闭）；
+ * - Router：模板路由（`{id}` / `{id:int}`）+ 分组 + 中间件洋葱；
+ * - HttpReq：请求侧一行式取值（读当前请求上下文）；
+ * - JsonRes：响应侧一行式输出（写当前请求上下文）；
+ * - ServerLogger：服务器日志包装（对基础设施 Logger 的 HTTP 场景定制）；
+ * - AppError：业务可预期错误（入口唯一兜底出口的契约类型）。
  *
  * 与 `src/httpClient.js`（出站 HTTP）对称：本目录只处理"服务端入站"语义。
  *
@@ -14,5 +17,9 @@
  * - `import { Router } from 'ysyuki-lib-on-nodejs/httpServer/router'`
  */
 export { AppError } from './appError.js';
-export { RequestJson } from './requestJson.js';
+export { HttpReq } from './httpReq.js';
+export { HttpServer } from './server.js';
+export { JsonRes } from './jsonRes.js';
+export { Middleware } from './middleware.js';
 export { Router } from './router.js';
+export { ServerLogger } from './serverLogger.js';

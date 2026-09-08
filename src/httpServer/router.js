@@ -1,39 +1,62 @@
 /**
- * 自研薄路由（无第三方依赖）
+ * 自研薄路由（FastAPI 风格模板，无第三方依赖）
  *
- * 路由定义：`map(method, route, target, name)`，
- * 占位符 `[i:uid]`、`[a:text]`、`[h:id]`、`[*:path]`、`[**:all]`、`[]` 及可选后缀 `?`。
+ * 模板语法（路径段占位符）：
+ * - `{name}`：默认字符串段（不含斜杠）；
+ * - `{name:type}`：指定类型段，内置 int / float / bool / string / hex / alpha / path / all；
+ * - `{name:type?}` 或 `{name?}`：可选段（缺失时该键不出现在 params）；
+ * - `{path:path}`：跨斜杠捕获（非贪婪，至少一个字符）；`{rest:all}`：跨斜杠且包含尾斜杠；
+ * - `@` 前缀：整条路由按自定义正则匹配（命名组进 params，数字组丢弃）；
+ * - `*`：通配全部路径。
  *
  * 行为约定：
- * - 编译结果按路由条目缓存；
- * - `match` 未命中返回 `null`，命中返回 `{ target, params, name }`。
+ * - 匹配按注册顺序，先注册先命中；
+ * - `match` 返回 `{ status, target, params, name, allowed, middleware }`：
+ *   status 为 hit / methodNotAllowed / notFound；路径命中而方法不符时给出 allowed（405 用）；
+ * - HEAD 请求可命中 GET 路由（响应体由入口层按 HEAD 语义抑制）；
+ * - 默认忽略尾斜杠（`trailingSlash: 'strict'` 可关闭）；
+ * - 未知类型在注册时即抛错（自定义类型用 `addMatchTypes` 追加）。
  *
- * target 为接收上下文对象的函数 `(ctx) => {...}`，路径参数经 ctx.params 承接。
+ * 中间件：`use(...)` 注册全局中间件（分发时组合）；在 `group()` 内注册的中间件
+ * 绑定到该分组后续注册的路由；`options.middleware` 绑定单条路由。
  *
+ * @typedef {(ctx: any, next: () => Promise<void>) => any} RouteMiddleware
+ * @typedef {{name?: string|null, middleware?: RouteMiddleware[]}} RouteOptions
+ * @typedef {object} RouteEntry
+ * @property {string[]} methods 允许的方法（`*` 表示全部）
+ * @property {string} route 注册时的路由模式
+ * @property {Function} target 处理器
+ * @property {string|null} name 路由名
+ * @property {RegExp|null} regex 编译后的正则（无占位符时为 null）
+ * @property {Record<string, string>} paramTypes 各路径参数的类型
+ * @property {RouteMiddleware[]} middleware 该路由绑定的中间件
+ * @typedef {{status: 'hit'|'methodNotAllowed'|'notFound', target: Function|null, params: Record<string, string|number|boolean>, name: string|null, allowed: string[], middleware: RouteMiddleware[]}} RouteMatch
  */
 
 /**
- * 默认匹配类型（正则片段）
+ * 内置类型（正则片段）
  * @type {Record<string, string>}
  */
-const DEFAULT_MATCH_TYPES = {
-    i: '[0-9]+',
-    a: '[0-9A-Za-z]+',
-    h: '[0-9A-Fa-f]+',
-    '*': '.+?',
-    '**': '.+',
-    '': '[^/.]+',
+const DEFAULT_TYPES = {
+    int: '[0-9]+',
+    float: '[0-9]+(?:\\.[0-9]+)?',
+    bool: '(?:true|false)',
+    string: '[^/]+',
+    hex: '[0-9A-Fa-f]+',
+    alpha: '[0-9A-Za-z]+',
+    path: '.+?',
+    all: '.+',
 };
 
 /**
- * 占位符块匹配模式（含点/斜杠前缀捕获与可选段后缀）
+ * 模板块匹配模式：前缀（`/` 或 `.`）+ `{name[:type][?]}`
  */
-const BLOCK_PATTERN = /(\/|\.|)\[([^:\]]*)(?::([^:\]]*))?\](\?|)/g;
+const BLOCK_PATTERN = /(\/|\.|)\{([^}:?]*)(?::([^}?]+))?(\?)?\}/g;
 
 export class Router {
     /**
-     * 全部路由（含命名路由）
-     * @type {Array<{method: string, route: string, target: Function, name: string|null, position: number, regex: RegExp|null}>}
+     * 全部路由
+     * @type {RouteEntry[]}
      */
     routes = [];
 
@@ -50,41 +73,61 @@ export class Router {
     basePath = '';
 
     /**
-     * 匹配类型表
-     * @type {Record<string, string>}
+     * 尾斜杠策略：ignore（默认，忽略）/ strict（严格）
+     * @type {'ignore'|'strict'}
      */
-    matchTypes = { ...DEFAULT_MATCH_TYPES };
+    trailingSlash = 'ignore';
 
     /**
-     * @param {Array<[string, string, Function, string?]>} [routes] 批量路由 [[method, route, target, name], ...]
-     * @default routes = []
-     * @param {string} [basePath] 基础路径
-     * @default basePath = ''
-     * @param {Record<string, string>} [matchTypes] 追加/覆盖的匹配类型
-     * @default matchTypes = {}
+     * 类型表
+     * @type {Record<string, string>}
      */
-    constructor(routes = [], basePath = '', matchTypes = {}) {
+    matchTypes = { ...DEFAULT_TYPES };
+
+    /**
+     * 全局中间件（分发时组合，注册顺序即执行顺序）
+     * @type {RouteMiddleware[]}
+     */
+    globalMiddleware = [];
+
+    /**
+     * 分组栈（`group()` 内部有效）
+     * @type {Array<{prefix: string, middleware: RouteMiddleware[]}>}
+     */
+    #groupStack = [];
+
+    /**
+     * @param {object} [options] 选项
+     * @param {Array<[string, string, Function, (string|RouteOptions)?]>} [options.routes] 批量路由
+     * @param {string} [options.basePath] 基础路径
+     * @param {'ignore'|'strict'} [options.trailingSlash] 尾斜杠策略
+     * @param {Record<string, string>} [options.types] 追加/覆盖的匹配类型
+     * @default options = {}
+     */
+    constructor(options = {}) {
+        const { routes = [], basePath = '', trailingSlash = 'ignore', types = {} } = options;
         this.addRoutes(routes);
         this.setBasePath(basePath);
-        this.addMatchTypes(matchTypes);
+        this.trailingSlash = trailingSlash;
+        this.addMatchTypes(types);
     }
 
     /**
      * 获取全部路由（只读视图）
-     * @returns {Array<object>} 全部路由
+     * @returns {RouteEntry[]} 全部路由
      */
     getRoutes() {
         return this.routes;
     }
 
     /**
-     * 从数组批量添加路由，格式：[[method, route, target, name], ...]
+     * 从数组批量添加路由，格式：[[method, route, target, options], ...]
      *
-     * @param {Array<[string, string, Function, string?]>} routes 路由数组
+     * @param {Array<[string, string, Function, (string|RouteOptions)?]>} routes 路由数组
      */
     addRoutes(routes) {
-        for (const [method, route, target, name] of routes) {
-            this.map(method, route, target, name);
+        for (const [method, route, target, options] of routes) {
+            this.map(method, route, target, options);
         }
     }
 
@@ -107,72 +150,177 @@ export class Router {
     }
 
     /**
+     * 注册中间件（全局；在 `group()` 内注册则绑定该分组）
+     *
+     * @param {...RouteMiddleware} middlewares 中间件
+     */
+    use(...middlewares) {
+        const current = this.#groupStack[this.#groupStack.length - 1];
+        if (current === undefined) {
+            this.globalMiddleware.push(...middlewares);
+            return;
+        }
+        current.middleware.push(...middlewares);
+    }
+
+    /**
+     * 注册分组（共享路径前缀与中间件）
+     *
+     * @param {string} prefix 路径前缀
+     * @param {(router: Router) => void} callback 分组内注册回调（可嵌套）
+     */
+    group(prefix, callback) {
+        this.#groupStack.push({ prefix, middleware: [] });
+        try {
+            callback(this);
+        } finally {
+            this.#groupStack.pop();
+        }
+    }
+
+    /**
      * 将路由映射到目标处理器
      *
-     * @param {string} method HTTP 方法，或 `|` 分隔的多方法（GET|POST|PATCH|PUT|DELETE）
-     * @param {string} route 路由模式；自定义正则须以 `@` 开头；可用预设匹配类型占位符如 `[i:id]`
-     * @param {Function} target 目标处理函数 `(ctx) => {...}`
-     * @param {string|null} [name] 路由名称（可用于反向路由 generate）
-     * @default name = null
+     * @param {string} method HTTP 方法，或 `|` 分隔的多方法（GET|POST），`*` 表示全部
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器 `(ctx) => any`
+     * @param {string|RouteOptions|null} [options] 路由名（字符串）或选项对象 `{ name, middleware }`
+     * @default options = null
      */
-    map(method, route, target, name = null) {
-        const position = route.indexOf('[');
-        /** @type {RegExp|null} */
-        let regex = null;
-        if (route.startsWith('@')) {
-            regex = new RegExp(route.slice(1), 'u');
-        } else if (position !== -1) {
-            regex = this.compileRoute(route);
-        }
+    map(method, route, target, options = null) {
+        const { name, middleware } = normalizeOptions(options);
+        const prefix = this.#groupStack.map((item) => item.prefix).join('');
+        const groupMiddleware = this.#groupStack.flatMap((item) => [...item.middleware]);
 
-        this.routes.push({ method, route, target, name, position, regex });
+        const fullRoute = prefix + route;
+        const { regex, paramTypes } = this.compileRoute(fullRoute);
+
+        this.routes.push({
+            methods: String(method).toUpperCase().split('|').filter((item) => item !== ''),
+            route: fullRoute,
+            target,
+            name,
+            regex,
+            paramTypes,
+            middleware: [...groupMiddleware, ...middleware],
+        });
 
         if (name) {
             if (Object.prototype.hasOwnProperty.call(this.namedRoutes, name)) {
                 throw new Error(`Can not redeclare route '${name}'`);
             }
-            this.namedRoutes[name] = route;
+            this.namedRoutes[name] = fullRoute;
         }
+    }
+
+    /**
+     * 注册 GET 路由
+     *
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器
+     * @param {string|RouteOptions|null} [options] 路由名或选项
+     * @default options = null
+     */
+    get(route, target, options = null) {
+        this.map('GET', route, target, options);
+    }
+
+    /**
+     * 注册 POST 路由
+     *
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器
+     * @param {string|RouteOptions|null} [options] 路由名或选项
+     * @default options = null
+     */
+    post(route, target, options = null) {
+        this.map('POST', route, target, options);
+    }
+
+    /**
+     * 注册 PUT 路由
+     *
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器
+     * @param {string|RouteOptions|null} [options] 路由名或选项
+     * @default options = null
+     */
+    put(route, target, options = null) {
+        this.map('PUT', route, target, options);
+    }
+
+    /**
+     * 注册 PATCH 路由
+     *
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器
+     * @param {string|RouteOptions|null} [options] 路由名或选项
+     * @default options = null
+     */
+    patch(route, target, options = null) {
+        this.map('PATCH', route, target, options);
+    }
+
+    /**
+     * 注册 DELETE 路由
+     *
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器
+     * @param {string|RouteOptions|null} [options] 路由名或选项
+     * @default options = null
+     */
+    delete(route, target, options = null) {
+        this.map('DELETE', route, target, options);
+    }
+
+    /**
+     * 注册任意方法的路由
+     *
+     * @param {string} route 路由模式
+     * @param {Function} target 处理器
+     * @param {string|RouteOptions|null} [options] 路由名或选项
+     * @default options = null
+     */
+    any(route, target, options = null) {
+        this.map('*', route, target, options);
     }
 
     /**
      * 反向路由：按名称与参数生成 URL
      *
+     * 必填参数缺失时抛错（避免静默生成错误 URL）；可选段缺失时连同分隔符一起剥离。
+     *
      * @param {string} routeName 路由名称
      * @param {Record<string, any>} [params] 替换占位符的参数
      * @default params = {}
      * @returns {string} 生成的 URL
+     * @throws {Error} 路由名不存在，或必填参数缺失时抛出
      */
     generate(routeName, params = {}) {
         if (!Object.prototype.hasOwnProperty.call(this.namedRoutes, routeName)) {
             throw new Error(`Route '${routeName}' does not exist.`);
         }
 
-        const route = this.namedRoutes[routeName];
+        let url = this.basePath + this.namedRoutes[routeName];
 
-        // 拼接基础路径
-        let url = this.basePath + route;
+        for (const match of url.matchAll(BLOCK_PATTERN)) {
+            const [block, prefix, name, , optional] = match;
 
-        let index = 0;
-        for (const match of route.matchAll(BLOCK_PATTERN)) {
-            const [block, pre, , param = '', optional = ''] = match;
-            index += 1;
-
-            let blockBody = block;
-            if (pre) {
-                blockBody = blockBody.slice(1);
+            if (name !== '' && Object.prototype.hasOwnProperty.call(params, name)) {
+                url = url.split(block).join(prefix + String(params[name]));
+                continue;
             }
 
-            if (Object.prototype.hasOwnProperty.call(params, param)) {
-                // 参数存在，替换为参数值
-                url = url.split(blockBody).join(String(params[param]));
-            } else if (optional && index !== 1) {
-                // 仅当不在基段时剥离前置斜杠/点
-                url = url.split(pre + blockBody).join('');
-            } else {
-                // 剥离匹配块
-                url = url.split(blockBody).join('');
+            if (optional === undefined) {
+                if (name === '') {
+                    url = url.split(block).join('');
+                    continue;
+                }
+                throw new Error(`Route '${routeName}' requires parameter '${name}'.`);
             }
+
+            // 可选段缺失：连同分隔符一起剥离（block 本身已含前缀）
+            url = url.split(block).join('');
         }
 
         return url;
@@ -182,110 +330,201 @@ export class Router {
      * 匹配请求 URL 与路由表
      *
      * @param {string} requestUrl 请求路径（可含查询串，会剥离）
-     * @param {string} requestMethod HTTP 方法
-     * @returns {{target: Function, params: Record<string, string>, name: string|null}|null} 命中返回路由信息，未命中返回 null
+     * @param {string} requestMethod HTTP 方法（大小写不敏感）
+     * @returns {RouteMatch} 匹配结果
      */
     match(requestUrl, requestMethod) {
-        // 剥离基础路径
-        let url = requestUrl.slice(this.basePath.length);
+        const method = String(requestMethod ?? '').toUpperCase();
+        const url = this.#prepareUrl(requestUrl);
+        /** @type {Set<string>} */
+        const allowed = new Set();
 
-        // 剥离查询串（?a=b）
-        const queryIndex = url.indexOf('?');
-        if (queryIndex !== -1) {
-            url = url.slice(0, queryIndex);
-        }
-
-        const lastRequestUrlChar = url.length > 0 ? url[url.length - 1] : '';
-
-        for (const handler of this.routes) {
-            const { method: methods, route, target, name, position, regex } = handler;
-
-            const methodMatch = methods.toLowerCase().includes(String(requestMethod).toLowerCase());
-
-            // 方法不匹配，继续下一条路由
-            if (!methodMatch) {
+        for (const route of this.routes) {
+            const params = this.#matchRoute(route, url);
+            if (params === null) {
                 continue;
             }
 
-            /** @type {Record<string, string>} */
-            let params = {};
-            let isMatch = false;
-
-            /**
-             * 从 exec 结果提取命名参数（未参与匹配的可选组不带上）
-             * @param {RegExpExecArray} result 匹配结果
-             */
-            const collectParams = (result) => {
-                for (const [key, value] of Object.entries(result.groups ?? {})) {
-                    if (value !== undefined) {
-                        params[key] = value;
+            if (!matchesMethod(route.methods, method)) {
+                for (const item of route.methods) {
+                    if (item !== '*') {
+                        allowed.add(item);
                     }
                 }
+                continue;
+            }
+
+            return {
+                status: 'hit',
+                target: route.target,
+                params,
+                name: route.name,
+                allowed: [],
+                middleware: route.middleware,
             };
-
-            if (route === '*') {
-                // * 通配（全部匹配）
-                isMatch = true;
-            } else if (route.startsWith('@')) {
-                // @ 自定义正则
-                const result = regex ? regex.exec(url) : null;
-                if (result) {
-                    isMatch = true;
-                    collectParams(result);
-                }
-            } else if (position === -1) {
-                // 无参数，直接字符串比较
-                isMatch = url === route;
-            } else {
-                // 先比较最长非参数前缀，再走正则
-                // 参数块前一个字符是斜杠时豁免（可选参数可能省略该段）
-                if (!url.startsWith(route.slice(0, position)) && (lastRequestUrlChar === '/' || route[position - 1] !== '/')) {
-                    continue;
-                }
-
-                const result = regex ? regex.exec(url) : null;
-                if (result) {
-                    isMatch = true;
-                    collectParams(result);
-                }
-            }
-
-            if (isMatch) {
-                return { target, params, name };
-            }
         }
 
-        return null;
+        if (allowed.size > 0) {
+            return {
+                status: 'methodNotAllowed',
+                target: null,
+                params: {},
+                name: null,
+                allowed: [...allowed],
+                middleware: [],
+            };
+        }
+        return { status: 'notFound', target: null, params: {}, name: null, allowed: [], middleware: [] };
     }
 
     /**
      * 编译路由的正则（map 时调用一次并缓存）
      *
+     * 无占位符且非 `@` 自定义正则时返回 regex: null（走字符串比较）。
+     *
      * @param {string} route 路由模式
-     * @returns {RegExp} 锚定正则
+     * @returns {{regex: RegExp|null, paramTypes: Record<string, string>}} 锚定正则与参数类型表
      */
     compileRoute(route) {
-        let compiled = route;
-
-        for (const match of route.matchAll(BLOCK_PATTERN)) {
-            const [block, pre, type, param = '', optional = ''] = match;
-
-            const typeRegex = Object.prototype.hasOwnProperty.call(this.matchTypes, type)
-                ? this.matchTypes[type]
-                : type;
-
-            let prefix = pre;
-            if (prefix === '.') {
-                prefix = '\\.';
-            }
-
-            const optionalMark = optional !== '' ? '?' : '';
-            const namePart = param !== '' ? `?<${param}>` : '';
-
-            const pattern = `(?:${prefix}(${namePart}${typeRegex})${optionalMark})${optionalMark}`;
-            compiled = compiled.split(block).join(pattern);
+        if (route.startsWith('@')) {
+            return { regex: new RegExp(route.slice(1), 'u'), paramTypes: {} };
         }
 
-        return new RegExp('^' + compiled + '$', 'u');
+        if (route === '*' || route.indexOf('{') === -1) {
+            return { regex: null, paramTypes: {} };
+        }
+
+        let compiled = route;
+        /** @type {Record<string, string>} */
+        const paramTypes = {};
+
+        for (const match of route.matchAll(BLOCK_PATTERN)) {
+            const [block, prefix, name, type = 'string', optional] = match;
+
+            if (!Object.prototype.hasOwnProperty.call(this.matchTypes, type)) {
+                throw new Error(`未知的路由类型：${type}（可用 addMatchTypes 追加）`);
+            }
+
+            if (name !== '') {
+                paramTypes[name] = type;
+            }
+
+            const prefixRegex = prefix === '.' ? '\\.' : prefix;
+            const namePart = name === '' ? '' : `?<${name}>`;
+            const blockRegex = `${prefixRegex}(${namePart}${this.matchTypes[type]})`;
+            const optionalMark = optional === undefined ? '' : '?';
+
+            compiled = compiled.split(block).join(`(?:${blockRegex})${optionalMark}`);
+        }
+
+        return { regex: new RegExp(`^${compiled}$`, 'u'), paramTypes };
     }
+
+    /**
+     * 归一化请求 URL（剥离 basePath、查询串与尾斜杠）
+     *
+     * @param {string} requestUrl 原始请求 URL
+     * @returns {string} 归一化后的路径
+     */
+    #prepareUrl(requestUrl) {
+        let url = requestUrl;
+
+        if (this.basePath !== '') {
+            url = url.slice(this.basePath.length);
+        }
+
+        const queryIndex = url.indexOf('?');
+        if (queryIndex !== -1) {
+            url = url.slice(0, queryIndex);
+        }
+
+        if (url === '') {
+            return '/';
+        }
+        if (this.trailingSlash === 'ignore' && url.length > 1 && url.endsWith('/')) {
+            return url.replace(/\/+$/, '');
+        }
+        return url;
+    }
+
+    /**
+     * 单条路由的路径匹配（不含方法判定）
+     *
+     * @param {RouteEntry} route 路由条目
+     * @param {string} url 归一化后的路径
+     * @returns {Record<string, string|number|boolean>|null} 命中返回路径参数（按类型转换，无参数为空对象），未命中返回 null
+     */
+    #matchRoute(route, url) {
+        if (route.route === '*') {
+            return {};
+        }
+
+        if (route.regex === null) {
+            return url === route.route ? {} : null;
+        }
+
+        const result = route.regex.exec(url);
+        if (result === null) {
+            return null;
+        }
+
+        /** @type {Record<string, string|number|boolean>} */
+        const params = {};
+        for (const [key, value] of Object.entries(result.groups ?? {})) {
+            if (value === undefined) {
+                continue;
+            }
+            params[key] = convertParam(value, route.paramTypes[key] ?? 'string');
+        }
+        return params;
+    }
+}
+
+/**
+ * 路径参数按类型转换（int / float → number，bool → boolean，其余保留字符串）
+ *
+ * @param {string} value 原始字符串值
+ * @param {string} type 类型名
+ * @returns {string|number|boolean} 转换后的值
+ */
+function convertParam(value, type) {
+    switch (type) {
+        case 'int':
+        case 'float':
+            return Number(value);
+        case 'bool':
+            return value === 'true';
+        default:
+            return value;
+    }
+}
+
+/**
+ * 归一化注册选项（兼容字符串路由名写法）
+ *
+ * @param {string|RouteOptions|null} options 路由名或选项对象
+ * @returns {{name: string|null, middleware: RouteMiddleware[]}} 归一化选项
+ */
+function normalizeOptions(options) {
+    if (typeof options === 'string') {
+        return { name: options, middleware: [] };
+    }
+    if (options === null || options === undefined) {
+        return { name: null, middleware: [] };
+    }
+    return { name: options.name ?? null, middleware: options.middleware ?? [] };
+}
+
+/**
+ * 方法判定（HEAD 可命中 GET；`*` 表示任意方法）
+ *
+ * @param {string[]} methods 路由允许的方法
+ * @param {string} method 请求方法（大写）
+ * @returns {boolean} 是否匹配
+ */
+function matchesMethod(methods, method) {
+    if (methods.includes('*') || methods.includes(method)) {
+        return true;
+    }
+    return method === 'HEAD' && methods.includes('GET');
 }

@@ -4,8 +4,12 @@ import { describe, it } from 'node:test';
 import * as httpServerBarrel from 'ysyuki-lib-on-nodejs/httpServer';
 import * as topBarrel from 'ysyuki-lib-on-nodejs';
 import { AppError } from '#YukiLib/httpServer/appError';
-import { RequestJson } from '#YukiLib/httpServer/requestJson';
+import { HttpReq } from '#YukiLib/httpServer/httpReq';
+import { HttpServer } from '#YukiLib/httpServer/server';
+import { JsonRes } from '#YukiLib/httpServer/jsonRes';
+import { Middleware } from '#YukiLib/httpServer/middleware';
 import { Router } from '#YukiLib/httpServer/router';
+import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
 import { Router as AliasRouter } from '#YukiLib/httpServer';
 
 /**
@@ -17,17 +21,21 @@ import { Router as AliasRouter } from '#YukiLib/httpServer';
  * - 顶层 barrel：`ysyuki-lib-on-nodejs`。
  */
 describe('httpServer 子域入口与子路径导出', () => {
-    it('barrel 导出服务端三件套', () => {
+    it('barrel 导出服务端框架成员', () => {
         assert.deepEqual(
             Object.keys(httpServerBarrel).sort(),
-            ['AppError', 'RequestJson', 'Router'],
+            ['AppError', 'HttpReq', 'HttpServer', 'JsonRes', 'Middleware', 'Router', 'ServerLogger'],
         );
     });
 
     it('子域 barrel 与深子路径为同一实现（同一类对象）', () => {
         assert.equal(httpServerBarrel.AppError, AppError);
-        assert.equal(httpServerBarrel.RequestJson, RequestJson);
+        assert.equal(httpServerBarrel.HttpReq, HttpReq);
+        assert.equal(httpServerBarrel.HttpServer, HttpServer);
+        assert.equal(httpServerBarrel.JsonRes, JsonRes);
+        assert.equal(httpServerBarrel.Middleware, Middleware);
         assert.equal(httpServerBarrel.Router, Router);
+        assert.equal(httpServerBarrel.ServerLogger, ServerLogger);
     });
 
     it('#YukiLib/httpServer 别名与子域 barrel 指向同一实现', () => {
@@ -35,14 +43,18 @@ describe('httpServer 子域入口与子路径导出', () => {
     });
 
     it('子域 barrel 与顶层 barrel 为同一实现', () => {
-        assert.equal(httpServerBarrel.AppError, topBarrel.AppError);
-        assert.equal(httpServerBarrel.RequestJson, topBarrel.RequestJson);
-        assert.equal(httpServerBarrel.Router, topBarrel.Router);
+        for (const key of ['AppError', 'HttpReq', 'HttpServer', 'JsonRes', 'Middleware', 'Router', 'ServerLogger']) {
+            assert.equal(httpServerBarrel[key], topBarrel[key], `${key} 应为同一实现`);
+        }
     });
 
-    it('三件套均为可实例化的类', () => {
+    it('成员均为可用的类', () => {
         assert.ok(new httpServerBarrel.Router() instanceof httpServerBarrel.Router);
         assert.ok(new httpServerBarrel.AppError('x') instanceof httpServerBarrel.AppError);
-        assert.ok(new httpServerBarrel.RequestJson(null) instanceof httpServerBarrel.RequestJson);
+        assert.equal(typeof httpServerBarrel.HttpReq.getPostData, 'function');
+        assert.equal(typeof httpServerBarrel.HttpServer.create, 'function');
+        assert.equal(typeof httpServerBarrel.JsonRes.json, 'function');
+        assert.equal(typeof httpServerBarrel.Middleware.cors, 'function');
+        assert.equal(typeof httpServerBarrel.ServerLogger.access, 'function');
     });
 });

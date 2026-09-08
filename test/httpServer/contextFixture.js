@@ -1,0 +1,154 @@
+import { runWithContext } from '#YukiLib/httpServer/context';
+
+/**
+ * httpServer 测试夹具：请求上下文、请求替身、响应替身
+ *
+ * 各用例自包含，不依赖库自身目录下的任何配置文件。
+ *
+ * @typedef {object} ResStub
+ * @property {number} statusCode 已设置的状态码
+ * @property {Record<string, any>} headers 按写出顺序记录的响应头
+ * @property {string[]} cookieLines 追加的 Set-Cookie 行
+ * @property {boolean} ended 是否已结束响应
+ * @property {string|undefined} body 传入 end() 的响应体
+ */
+
+/**
+ * 构造响应替身（统一出口只用到 statusCode / setHeader / appendHeader / end）
+ *
+ * @returns {ResStub} 替身
+ */
+export function makeResStub() {
+    const stub = {
+        statusCode: 200,
+        /** @type {Record<string, any>} */
+        headers: {},
+        /** @type {string[]} */
+        cookieLines: [],
+        ended: false,
+        /** @type {string|undefined} */
+        body: undefined,
+        /** @type {Record<string, Function[]>} 事件监听（accessLog 依赖 finish） */
+        listeners: {},
+        /**
+         * @param {string} name 头名
+         * @param {any} value 头值
+         */
+        setHeader(name, value) {
+            this.headers[name] = value;
+        },
+        /**
+         * @param {string} event 事件名
+         * @param {Function} listener 监听函数
+         */
+        on(event, listener) {
+            (this.listeners[event] ??= []).push(listener);
+        },
+        /**
+         * @param {string} event 事件名
+         */
+        emit(event) {
+            for (const listener of this.listeners[event] ?? []) {
+                listener();
+            }
+        },
+        /**
+         * @param {string} name 头名
+         * @returns {any} 头值
+         */
+        getHeader(name) {
+            return this.headers[name];
+        },
+        /**
+         * @param {string} name 头名
+         * @param {string} value 头值
+         */
+        appendHeader(name, value) {
+            if (name === 'Set-Cookie') {
+                this.cookieLines.push(value);
+                this.headers[name] = this.cookieLines.length === 1 ? value : [...this.cookieLines];
+                return;
+            }
+            this.headers[name] = value;
+        },
+        /**
+         * @param {string} [chunk] 响应体
+         */
+        end(chunk) {
+            this.ended = true;
+            this.body = chunk;
+            this.emit('finish');
+        },
+    };
+    return /** @type {ResStub} */ (/** @type {unknown} */ (stub));
+}
+
+/**
+ * 构造请求替身
+ *
+ * @param {object} [options] 选项
+ * @param {Record<string, any>} [options.headers] 请求头（键小写）
+ * @param {string} [options.remoteAddress] socket 远端地址
+ * @returns {import('node:http').IncomingMessage} 请求替身
+ */
+export function makeReqStub(options = {}) {
+    const { headers = {}, remoteAddress = '127.0.0.1' } = options;
+    return /** @type {import('node:http').IncomingMessage} */ (/** @type {unknown} */ ({
+        headers,
+        socket: { remoteAddress },
+    }));
+}
+
+/**
+ * 构造请求上下文
+ *
+ * @param {object} [options] 选项
+ * @param {string} [options.method] HTTP 方法
+ * @param {string} [options.path] 请求路径
+ * @param {Record<string, string|number|boolean>} [options.params] 路径参数
+ * @param {Record<string, string>} [options.query] 查询参数
+ * @param {Record<string, any>} [options.body] 已解析请求体
+ * @param {string} [options.rawBody] 请求体原文
+ * @param {Record<string, any>} [options.headers] 请求头
+ * @param {string} [options.requestId] 请求标识
+ * @param {ResStub} [options.res] 响应替身
+ * @returns {import('#YukiLib/httpServer/context').HttpContext} 请求上下文
+ */
+export function makeCtx(options = {}) {
+    const {
+        method = 'POST',
+        path = '/',
+        params = {},
+        query = {},
+        body = {},
+        rawBody = '',
+        headers = {},
+        requestId = 'req-test-1',
+        res = makeResStub(),
+    } = options;
+    return /** @type {import('#YukiLib/httpServer/context').HttpContext} */ (/** @type {unknown} */ ({
+        req: makeReqStub({ headers }),
+        res,
+        method,
+        path,
+        params,
+        query: new URLSearchParams(query),
+        body,
+        rawBody,
+        requestId,
+        state: {},
+        logger: { info() {}, warn() {}, error() {} },
+    }));
+}
+
+/**
+ * 在指定上下文中执行
+ *
+ * @template T
+ * @param {import('#YukiLib/httpServer/context').HttpContext} ctx 上下文
+ * @param {() => T} handler 处理函数
+ * @returns {T} 处理结果
+ */
+export function runIn(ctx, handler) {
+    return runWithContext(ctx, handler);
+}

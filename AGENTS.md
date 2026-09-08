@@ -24,8 +24,9 @@
 - 单元测试：内置 `node:test`
 - 内部引用：库内一律相对路径（`./config.js`）；对外经 `exports` 子路径导出，
   并提供 `#YukiLib/*` 自引用别名，使宿主项目可沿用既有写法
-- 源码布局：源码根 `src/`；入站 HTTP 服务端模块（`appError` / `requestJson` / `router`）置于
-  `src/httpServer/`（含子域 barrel），基础设施与出站模块置于 `src/` 根；`test/` 与 `src/` 同构镜像
+- 源码布局：源码根 `src/`；入站 HTTP 服务端框架置于 `src/httpServer/`
+  （`server` / `context` / `httpReq` / `jsonRes` / `appError` / `serverLogger` / `router` / `onion` /
+  `middleware`，含子域 barrel），基础设施与出站模块置于 `src/` 根；`test/` 与 `src/` 同构镜像
 
 ## 命名风格
 

@@ -9,16 +9,22 @@
 
 ```
 src/
-  index.js                  包入口（barrel，聚合全部 7 个类）
+  index.js                  包入口（barrel，聚合全部 11 个类）
   config.js                 基础设施：宿主根 / .env / config.json
   logger.js                 基础设施：结构化日志
   funcResult.js             值对象：不可变业务结果
   httpClient.js             出站 HTTP/HTTPS 客户端
-  httpServer/               入站 HTTP 服务端域
-    index.js                子域入口（barrel：AppError + RequestJson + Router）
+  httpServer/               入站 HTTP 服务端框架
+    index.js                子域入口（barrel）
+    server.js               HttpServer：入口、兜底出口、优雅关闭
+    context.js              请求上下文（AsyncLocalStorage）
+    httpReq.js              HttpReq：请求侧一行式取值
+    jsonRes.js              JsonRes：响应侧一行式输出
     appError.js             业务可预期错误
-    requestJson.js          请求体取值 + 统一 JSON 响应出口
-    router.js               薄路由
+    serverLogger.js         ServerLogger：服务器日志包装（包装 src/logger.js）
+    router.js               模板路由（{id} / {id:int}、分组、405、HEAD）
+    onion.js                中间件洋葱组合
+    middleware.js           Middleware：cors / accessLog / requestId（opt-in）
 ```
 
 `test/` 与 `src/` 同构镜像。
@@ -31,13 +37,54 @@ src/
 | `ysyuki-lib-on-nodejs/logger` | `Logger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道） |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
-| `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `RequestJson` / `Router` | 入站 HTTP 服务端子域入口（barrel） |
-| `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（宿主入口兜底出口依赖） |
-| `ysyuki-lib-on-nodejs/httpServer/requestJson` | `RequestJson` | 请求体取值与统一 JSON 响应出口 |
-| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` | 薄路由（占位符、可选段、反向路由） |
+| `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `JsonRes` / `Middleware` / `Router` / `ServerLogger` | 入站 HTTP 服务端子域入口（barrel） |
+| `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭 |
+| `ysyuki-lib-on-nodejs/httpServer/context` | `runWithContext` / `getCurrentContext` / `tryGetCurrentContext` | 请求上下文（AsyncLocalStorage） |
+| `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
+| `ysyuki-lib-on-nodejs/httpServer/jsonRes` | `JsonRes` | 响应侧一行式输出（json / empty / redirect / error / header / cookie） |
+| `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
+| `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志包装（请求级日志 / 访问日志 / 生命周期） |
+| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由） |
+| `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId） |
+| `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
 
-`ysyuki-lib-on-nodejs`（包根）导出以上全部 7 个类，等价于逐个从子路径导入；
-`ysyuki-lib-on-nodejs/httpServer` 等价于三个 `httpServer/*` 子路径。
+`ysyuki-lib-on-nodejs`（包根）导出以上全部 11 个类，等价于逐个从子路径导入；
+`ysyuki-lib-on-nodejs/httpServer` 等价于七个 `httpServer/*` 子路径。
+
+## 快速上手（httpServer 框架）
+
+```js
+import { HttpServer, Router, HttpReq, JsonRes, AppError, Logger } from '#YukiLib/httpServer';
+
+const router = new Router({ basePath: '/api' });
+
+// 路径参数按类型转换后作为首参注入；返回值自动序列化为 JSON 200
+router.get('/v1/users/{uid:int}', ({ uid }) => ({ uid, type: typeof uid }));
+
+// 一行式取值：缺失/类型不符 → 400 {status:'参数错误'}，显式默认值则不报错
+router.post('/v1/login', async () => {
+    const username = HttpReq.getPostData('username', 'string');
+    const remember = HttpReq.getPostData('remember', 'bool', false);
+    const ua = HttpReq.getHeader('user-agent');
+    if (username === 'bad') {
+        throw new AppError('密钥错误', 401);      // 或 JsonRes.error('密钥错误', 401)
+    }
+    return { username, remember, ua };            // 等价于 JsonRes.json({...})
+});
+
+// 中间件洋葱：全局（router.use）/ 分组（group 内 use）/ 路由级（options.middleware）
+router.use(async (ctx, next) => {
+    const startedAt = Date.now();
+    await next();
+    Logger.info('access', { path: ctx.path, ms: Date.now() - startedAt });
+});
+
+HttpServer.create({ router, serviceName: 'YueshiYuki Net Basic Service' })
+    .listen(8000, '127.0.0.1', () => Logger.info('服务已启动'));
+```
+
+响应与错误契约：JSON 输出 4 空格缩进、斜杠与非 ASCII 不转义；错误统一
+`{ "status": message }`；404 / 405 维持 `{ name, error, path, method }` 形状（405 附带 `Allow` 头）。
 
 ## 接入
 
@@ -61,15 +108,14 @@ src/
 ```js
 import { Config } from '#YukiLib/config';
 import { Logger } from '#YukiLib/logger';
-import { Router } from '#YukiLib/httpServer/router';
-import { AppError, RequestJson } from '#YukiLib/httpServer';
+import { HttpServer, Router, HttpReq, JsonRes, AppError } from '#YukiLib/httpServer';
 ```
 
 也可以直接用包名与子路径：
 
 ```js
 import { Config, Logger, Router } from 'ysyuki-lib-on-nodejs';
-import { RequestJson } from 'ysyuki-lib-on-nodejs/httpServer/requestJson';
+import { JsonRes } from 'ysyuki-lib-on-nodejs/httpServer/jsonRes';
 ```
 
 ### 方式二：pnpm workspace
@@ -119,6 +165,30 @@ import { RequestJson } from 'ysyuki-lib-on-nodejs/httpServer/requestJson';
    归入 `src/httpServer/`，子路径相应改为 `ysyuki-lib-on-nodejs/httpServer/*`，并新增子域入口
    `ysyuki-lib-on-nodejs/httpServer`。旧的 `.../appError`、`.../requestJson`、`.../router`
    子路径**不再提供**（宿主需同步改造）；类名、行为与响应契约均未变。
+7. **httpServer 框架化**（本次，破坏性）：
+   - `RequestJson` 拆为 `HttpReq`（请求侧一行式取值）+ `JsonRes`（响应侧一行式输出），
+     基于 `AsyncLocalStorage` 的请求上下文，类名与子路径均变更；
+   - 路由改为 FastAPI 风格 `{id}` / `{id:int}` 模板（取代 `[i:id]`），新增分组 `group()`、
+     中间件洋葱、405（带 `Allow`）、HEAD→GET、路径参数按类型转换；
+   - 新增 `HttpServer` 入口（create / listen / 五分支兜底 / 1 MB 请求体上限 /
+     非法 JSON 400 / 超时 / 优雅关闭）与 `Middleware`（cors / accessLog / requestId，opt-in）；
+   - `Logger` 仍在 `src/logger.js`（基础设施），`ServerLogger` 只是它的服务器场景包装；
+   - 保持不变的契约：JSON 序列化格式、`{status: message}` 错误体、校验失败 400、
+     404/405 响应体形状、类型系统（`array` 仍兼收对象）。
+
+## 从旧 API 迁移（宿主改造用）
+
+| 旧写法 | 新写法 |
+| --- | --- |
+| `new RequestJson(rawBody)` + `getPostDataItem('k','int')` | `HttpReq.getPostData('k','int')`（无需构造） |
+| `RequestJson.responseJson(res, data, code)` | `JsonRes.json(data, code)` 或处理器 `return data` |
+| `RequestJson.responseFastError('x', 401)` | `JsonRes.error('x', 401)` 或 `throw new AppError('x', 401)` |
+| `RequestJson.responseFastJump(res, url, 307)` | `JsonRes.redirect(url, 307)` |
+| `ctx.getQueryParam(key)` | `HttpReq.getQuery(key)` |
+| `router.map('GET', '/x/[i:id]', handler, name)` | `router.get('/x/{id:int}', handler, { name })` |
+| 处理器签名 `(ctx) => ...` | `(params, ctx) => ...`（路径参数已按类型转换） |
+| 宿主 `server.js`（handleRequest / createAppServer） | `HttpServer.create({ router, serviceName }).listen(...)` |
+| `#YukiLib/appError` | 不变（路径与类名均未变） |
 
 ## 验收
 
