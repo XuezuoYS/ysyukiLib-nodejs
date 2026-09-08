@@ -26,9 +26,9 @@ function writeWith(handler) {
     return res;
 }
 
-describe('JsonRes.json 统一 JSON 出口', () => {
+describe('JsonRes.jsonRes 统一 JSON 出口', () => {
     it('默认 200：仅 Content-Type，体为 4 空格缩进', () => {
-        const res = writeWith(() => JsonRes.json({ a: 1 }));
+        const res = writeWith(() => JsonRes.jsonRes({ a: 1 }));
         assert.equal(res.statusCode, 200);
         assert.deepEqual(Object.keys(res.headers), ['Content-Type']);
         assert.equal(res.headers['Content-Type'], 'application/json; charset=utf-8');
@@ -37,30 +37,44 @@ describe('JsonRes.json 统一 JSON 出口', () => {
     });
 
     it('自定义状态码生效', () => {
-        const res = writeWith(() => JsonRes.json({ a: 1 }, 201));
+        const res = writeWith(() => JsonRes.jsonRes({ a: 1 }, 201));
         assert.equal(res.statusCode, 201);
     });
 
+    it('headers 参数：附加头先于 Content-Type 写出，同名时由统一出口覆盖', () => {
+        const res = writeWith(() => JsonRes.jsonRes({ a: 1 }, 200, { 'X-Trace-Id': 't-1' }));
+        assert.deepEqual(Object.keys(res.headers), ['X-Trace-Id', 'Content-Type']);
+        assert.equal(res.headers['X-Trace-Id'], 't-1');
+
+        const override = writeWith(() => JsonRes.jsonRes({}, 200, { 'Content-Type': 'text/plain' }));
+        assert.equal(override.headers['Content-Type'], 'application/json; charset=utf-8');
+    });
+
+    it('headers 默认 null：与既有行为完全一致（仅 Content-Type）', () => {
+        const res = writeWith(() => JsonRes.jsonRes({ a: 1 }));
+        assert.deepEqual(Object.keys(res.headers), ['Content-Type']);
+    });
+
     it('JSON_PRETTY_PRINT：4 空格缩进逐层展开，空容器内联', () => {
-        const nested = writeWith(() => JsonRes.json({ a: { b: [1, 'x'] } }));
+        const nested = writeWith(() => JsonRes.jsonRes({ a: { b: [1, 'x'] } }));
         assert.equal(
             nested.body,
             '{\n    "a": {\n        "b": [\n            1,\n            "x"\n        ]\n    }\n}',
         );
 
-        const empty = writeWith(() => JsonRes.json({ list: [], map: {} }));
+        const empty = writeWith(() => JsonRes.jsonRes({ list: [], map: {} }));
         assert.equal(empty.body, '{\n    "list": [],\n    "map": {}\n}');
     });
 
     it('顶层标量不受缩进影响', () => {
         for (const [value, expected] of [[42, '42'], ['文本', '"文本"'], [true, 'true']]) {
-            const res = writeWith(() => JsonRes.json(value));
+            const res = writeWith(() => JsonRes.jsonRes(value));
             assert.equal(res.body, expected);
         }
     });
 
     it('JSON_UNESCAPED_SLASHES / JSON_UNESCAPED_UNICODE：斜杠与非 ASCII 不转义', () => {
-        const res = writeWith(() => JsonRes.json({ url: 'https://example.test/a/b?c=/d', status: '服务器内部错误', emoji: '🎉' }));
+        const res = writeWith(() => JsonRes.jsonRes({ url: 'https://example.test/a/b?c=/d', status: '服务器内部错误', emoji: '🎉' }));
         const body = /** @type {string} */ (res.body);
         assert.ok(body.includes('https://example.test/a/b?c=/d'));
         assert.ok(body.includes('"服务器内部错误"'));
@@ -70,7 +84,7 @@ describe('JsonRes.json 统一 JSON 出口', () => {
     });
 
     it('data 显式为 null：不设 Content-Type、不写响应体', () => {
-        const res = writeWith(() => JsonRes.json(null, 307));
+        const res = writeWith(() => JsonRes.jsonRes(null, 307));
         assert.equal(res.statusCode, 307);
         assert.deepEqual(Object.keys(res.headers), []);
         assert.equal(res.body, undefined);
@@ -78,14 +92,14 @@ describe('JsonRes.json 统一 JSON 出口', () => {
     });
 
     it('data 省略（undefined）：仍设 Content-Type 且体为空', () => {
-        const res = writeWith(() => JsonRes.json(undefined));
+        const res = writeWith(() => JsonRes.jsonRes(undefined));
         assert.deepEqual(Object.keys(res.headers), ['Content-Type']);
         assert.equal(res.body, undefined);
     });
 
     it('假值（0/空串/false）照常序列化', () => {
         for (const [value, expected] of [[0, '0'], ['', '""'], [false, 'false']]) {
-            const res = writeWith(() => JsonRes.json(value));
+            const res = writeWith(() => JsonRes.jsonRes(value));
             assert.equal(res.body, expected);
         }
     });
@@ -158,7 +172,7 @@ describe('JsonRes 响应修饰', () => {
         const res = writeWith(() => {
             JsonRes.status(201);
             JsonRes.header('X-Trace-Id', 't-1');
-            JsonRes.json({ ok: true });
+            JsonRes.jsonRes({ ok: true });
         });
         assert.equal(res.statusCode, 201);
         assert.deepEqual(Object.keys(res.headers), ['X-Trace-Id', 'Content-Type']);
@@ -178,7 +192,7 @@ describe('JsonRes 响应修饰', () => {
 
     it('请求上下文之外调用：抛明确错误', () => {
         assert.throws(
-            () => JsonRes.json({ a: 1 }),
+            () => JsonRes.jsonRes({ a: 1 }),
             (err) => /** @type {Error} */ (err).message.includes('不在 HTTP 请求上下文中'),
         );
     });

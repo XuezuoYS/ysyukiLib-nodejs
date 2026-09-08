@@ -7,14 +7,14 @@ import { getCurrentContext } from './context.js';
  * 全项目所有响应都经本门面写出，体输出等价 PHP
  * `json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)`（契约）。
  *
- * 无响应体形态：`json(null)` / `fastResEmpty(code)` / `fastResRedirect(url, code)`
+ * 无响应体形态：`jsonRes(null)` / `fastResEmpty(code)` / `fastResRedirect(url, code)`
  * 只写状态码与附加头，**不设 Content-Type、不写响应体**（重定向、空 200/204）。
  * 注意与"省略 data 参数"（值为 undefined）区分：后者仍设 Content-Type 且写出空体。
  *
  * 响应修饰（header / cookie / status）必须在写出响应之前调用。
  *
  * 常用函数：
- * - json(data, httpCode)：统一 JSON 出口
+ * - jsonRes(data, httpCode, headers)：统一 JSON 出口
  * - fastResEmpty(httpCode)：无响应体（默认 200）
  * - fastResRedirect(url, httpCode)：3xx 重定向（默认 307，仅 Location 头；不终止控制流，需自行 return）
  * - fastResError(message, httpCode)：抛 AppError，交由入口唯一兜底出口输出
@@ -27,10 +27,13 @@ export class JsonRes {
      *
      * @param {any} data 响应数据；显式传 null 表示无响应体且不声明 Content-Type
      * @param {number} [httpCode] HTTP 状态码；省略时沿用当前状态码（新建响应为 200），
-     * 因此 `status(201)` 之后调用 `json(data)` 不会把状态码打回 200
+     * 因此 `status(201)` 之后调用 `jsonRes(data)` 不会把状态码打回 200
+     * @param {Record<string, string>|null} [headers] 附加响应头；先于 Content-Type 设置，
+     * 同名时由本方法覆盖
+     * @default headers = null
      */
-    static json(data, httpCode) {
-        JsonRes.#write(getCurrentContext().res, data, httpCode, null);
+    static jsonRes(data, httpCode, headers = null) {
+        JsonRes.#write(getCurrentContext().res, data, httpCode, headers);
     }
 
     /**

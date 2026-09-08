@@ -22,7 +22,7 @@ import { ServerLogger } from './serverLogger.js';
  *    - 响应已开始后发生异常：只记日志，不重复写出。
  * 5. 超时与优雅关闭（SIGINT/SIGTERM → 停止接收新连接 → 空闲连接回收）。
  *
- * 处理器返回值：非 undefined 即自动经 JsonRes.json 序列化为 JSON 200；
+ * 处理器返回值：非 undefined 即自动经 JsonRes.jsonRes 序列化为 JSON 200；
  * 未产生任何输出时补一个空 200（`emptyResponse: false` 可关闭）。
  *
  * 签名约定：
@@ -341,7 +341,7 @@ export class HttpServer {
                     async (current) => {
                         const result = await handler(current.params, current);
                         if (result !== undefined && !current.res.headersSent && !current.res.writableEnded) {
-                            JsonRes.json(result);
+                            JsonRes.jsonRes(result);
                         }
                     },
                 ])(ctx);
@@ -389,7 +389,7 @@ export class HttpServer {
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      */
     #writeNotFound(ctx) {
-        JsonRes.json({
+        JsonRes.jsonRes({
             name: this.#options.serviceName,
             error: '404 not found',
             path: ctx.path,
@@ -405,7 +405,7 @@ export class HttpServer {
      */
     #writeMethodNotAllowed(ctx, allowed) {
         JsonRes.header('Allow', allowed.join(', '));
-        JsonRes.json({
+        JsonRes.jsonRes({
             name: this.#options.serviceName,
             error: '405 method not allowed',
             path: ctx.path,
@@ -434,12 +434,12 @@ export class HttpServer {
         }
 
         if (err instanceof AppError) {
-            JsonRes.json({ status: err.message }, err.statusCode);
+            JsonRes.jsonRes({ status: err.message }, err.statusCode);
             return;
         }
 
         ServerLogger.error('服务器内部错误', err, { path: ctx.path, method: ctx.method, requestId: ctx.requestId });
-        JsonRes.json({ status: '服务器内部错误' }, 500);
+        JsonRes.jsonRes({ status: '服务器内部错误' }, 500);
     }
 }
 

@@ -102,7 +102,7 @@ describe('Middleware.accessLog', () => {
         await runIn(ctx, () => compose([
             Middleware.accessLog(),
             async () => {
-                JsonRes.json({ ok: true }, 201);
+                JsonRes.jsonRes({ ok: true }, 201);
             },
         ])(ctx));
 

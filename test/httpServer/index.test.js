@@ -53,7 +53,7 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.ok(new httpServerBarrel.AppError('x') instanceof httpServerBarrel.AppError);
         assert.equal(typeof httpServerBarrel.HttpReq.getPostData, 'function');
         assert.equal(typeof httpServerBarrel.HttpServer.create, 'function');
-        assert.equal(typeof httpServerBarrel.JsonRes.json, 'function');
+        assert.equal(typeof httpServerBarrel.JsonRes.jsonRes, 'function');
         assert.equal(typeof httpServerBarrel.Middleware.cors, 'function');
         assert.equal(typeof httpServerBarrel.ServerLogger.access, 'function');
     });

@@ -41,7 +41,7 @@ src/
 | `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭 |
 | `ysyuki-lib-on-nodejs/httpServer/context` | `runWithContext` / `getCurrentContext` / `tryGetCurrentContext` | 请求上下文（AsyncLocalStorage） |
 | `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
-| `ysyuki-lib-on-nodejs/httpServer/jsonRes` | `JsonRes` | 响应侧一行式输出（json / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
+| `ysyuki-lib-on-nodejs/httpServer/jsonRes` | `JsonRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
 | `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志包装（请求级日志 / 访问日志 / 生命周期） |
 | `ysyuki-lib-on-nodejs/httpServer/router` | `Router` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由） |
@@ -69,7 +69,7 @@ router.post('/v1/login', async () => {
     if (username === 'bad') {
         throw new AppError('密钥错误', 401);      // 或 JsonRes.fastResError('密钥错误', 401)
     }
-    return { username, remember, ua };            // 等价于 JsonRes.json({...})
+    return { username, remember, ua };            // 等价于 JsonRes.jsonRes({...})
 });
 
 // 中间件洋葱：全局（router.use）/ 分组（group 内 use）/ 路由级（options.middleware）
@@ -181,7 +181,7 @@ import { JsonRes } from 'ysyuki-lib-on-nodejs/httpServer/jsonRes';
 | 旧写法 | 新写法 |
 | --- | --- |
 | `new RequestJson(rawBody)` + `getPostDataItem('k','int')` | `HttpReq.getPostData('k','int')`（无需构造） |
-| `RequestJson.responseJson(res, data, code)` | `JsonRes.json(data, code)` 或处理器 `return data` |
+| `RequestJson.responseJson(res, data, code)` | `JsonRes.jsonRes(data, code)` 或处理器 `return data` |
 | `RequestJson.responseFastError('x', 401)` | `JsonRes.fastResError('x', 401)` 或 `throw new AppError('x', 401)` |
 | `RequestJson.responseFastJump(res, url, 307)` | `JsonRes.fastResRedirect(url, 307)` |
 | `ctx.getQueryParam(key)` | `HttpReq.getQuery(key)` |
