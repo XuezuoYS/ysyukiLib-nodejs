@@ -9,7 +9,8 @@ import { getCurrentContext } from './context.js';
  *
  * 无响应体形态：`jsonRes(null)` / `fastResEmpty(code)` / `fastResRedirect(url, code)`
  * 只写状态码与附加头，**不设 Content-Type、不写响应体**（重定向、空 200/204）。
- * 注意与"省略 data 参数"（值为 undefined）区分：后者仍设 Content-Type 且写出空体。
+ * 注意与"省略 data 参数"（值为 undefined）区分：后者仍设 Content-Type 且写出空体
+ * （GET 为空体，HEAD 声明 `Content-Length: 0`，与 GET 的头保持一致）。
  *
  * 响应修饰（header / cookie / status）必须在写出响应之前调用。
  *
@@ -320,12 +321,16 @@ export class HttpRes {
 
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         // 4 空格缩进即 JSON_PRETTY_PRINT；斜杠与非 ASCII 不转义是 stringify 默认（两 UNESCAPED 标志）
-        const text = JSON.stringify(data, null, 4);
+        // data 为 undefined（省略入参的空体契约形态）/ 函数 / symbol 时 stringify 返回 undefined
+        // 而不是字符串：GET 走 `res.end(undefined)`，即"设 Content-Type、写出空体"，保持不变。
+        const text = /** @type {string|undefined} */ (JSON.stringify(data, null, 4));
         // HEAD 语义：头部应与 GET 一致（RFC 9110），只是没有 body。
         // 必须显式写 Content-Length——node 对 HEAD 请求会吞掉 res.end(text) 的长度并丢弃 body，
         // 不显式声明则客户端拿不到实体长度（无法预知大小、无法做下载进度）。
         if (getCurrentContext().method === 'HEAD') {
-            res.setHeader('Content-Length', String(Buffer.byteLength(text, 'utf8')));
+            // 空体形态（text 为 undefined）的实体长度为 0，与 GET 的 Content-Length: 0 对齐；
+            // 此处不得把 undefined 直接交给 byteLength——会抛 ERR_INVALID_ARG_TYPE 并转成 500。
+            res.setHeader('Content-Length', String(Buffer.byteLength(text ?? '', 'utf8')));
             res.end();
             return;
         }

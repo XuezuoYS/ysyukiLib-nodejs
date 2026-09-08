@@ -17,11 +17,12 @@ import { makeCtx, makeResStub, runIn } from './contextFixture.js';
  * 在带响应替身的上下文中执行
  *
  * @param {(res: import('./contextFixture.js').ResStub) => void} handler 处理函数
+ * @param {Parameters<typeof makeCtx>[0]} [ctxOptions] 上下文选项覆盖（如 method: 'HEAD'）
  * @returns {import('./contextFixture.js').ResStub} 响应替身
  */
-function writeWith(handler) {
+function writeWith(handler, ctxOptions = {}) {
     const res = makeResStub();
-    runIn(makeCtx({ res }), () => {
+    runIn(makeCtx({ res, ...ctxOptions }), () => {
         handler(res);
     });
     return res;
@@ -96,6 +97,21 @@ describe('HttpRes.jsonRes 统一 JSON 出口', () => {
         const res = writeWith(() => HttpRes.jsonRes(undefined));
         assert.deepEqual(Object.keys(res.headers), ['Content-Type']);
         assert.equal(res.body, undefined);
+    });
+
+    it('HEAD + data 省略（undefined）：不抛错，Content-Length 落 0', () => {
+        // stringify(undefined) 返回 undefined（不是字符串），此处不得因取字节数而炸
+        const res = writeWith(() => HttpRes.jsonRes(undefined), { method: 'HEAD' });
+        assert.deepEqual(Object.keys(res.headers), ['Content-Type', 'Content-Length']);
+        assert.equal(res.headers['Content-Length'], '0');
+        assert.equal(res.body, undefined);
+        assert.equal(res.ended, true);
+    });
+
+    it('HEAD + data 为函数（stringify 结果为 undefined）：同上', () => {
+        const res = writeWith(() => HttpRes.jsonRes(() => 1), { method: 'HEAD' });
+        assert.equal(res.headers['Content-Length'], '0');
+        assert.equal(res.ended, true);
     });
 
     it('假值（0/空串/false）照常序列化', () => {

@@ -502,6 +502,25 @@ describe('HttpServer：HTTP 语义', () => {
         assert.equal(res.headers.get('content-length'), getRes.headers.get('content-length'));
     });
 
+    it('HEAD + jsonRes() 空体形态：200 且 Content-Length: 0（不再 500）', async () => {
+        const base = await startServer((router) => {
+            router.get('/void', () => {
+                HttpRes.jsonRes(undefined);
+            });
+        });
+        const getRes = await fetch(`${base}/void`);
+        assert.equal(getRes.status, 200);
+        assert.equal(getRes.headers.get('content-type'), 'application/json; charset=utf-8');
+        assert.equal(await getRes.text(), '');
+
+        const res = await fetch(`${base}/void`, { method: 'HEAD' });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+        assert.equal(await res.text(), '');
+        // 与 GET 一致：GET 的空体是 Content-Length: 0
+        assert.equal(res.headers.get('content-length'), getRes.headers.get('content-length'));
+    });
+
     it('HttpRes.fastResRedirect：307 + Location，无响应体', async () => {
         const base = await startServer((router) => {
             router.get('/go', () => {
