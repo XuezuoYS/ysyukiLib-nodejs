@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, afterEach, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import http from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -607,6 +607,76 @@ describe('HttpServer：HTTP 语义', () => {
         } finally {
             Logger.logDir = previousDir;
             rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('HttpServer：全局中间件先于路由决策（方案 A）', () => {
+    /** 记录全局中间件覆盖到的请求 */
+    const seen = [];
+    let base = '';
+
+    before(async () => {
+        base = await startServer((router) => {
+            router.use(Middleware.cors({ origin: 'https://app.test' }));
+            router.use(async (ctx, next) => {
+                seen.push(`${ctx.method} ${ctx.path}`);
+                await next();
+            });
+            router.get('/x', () => ({ ok: true }));
+            router.post('/x', () => ({ ok: true }));
+        });
+    });
+
+    after(() => {
+        seen.length = 0;
+    });
+
+    it('CORS 预检短路：204 + 跨域头，不再被 405 拒掉', async () => {
+        // 真实浏览器预检：OPTIONS + Access-Control-Request-Method，无请求体
+        const res = await fetch(`${base}/x`, {
+            method: 'OPTIONS',
+            headers: { origin: 'https://app.test', 'access-control-request-method': 'POST' },
+        });
+        assert.equal(res.status, 204);
+        assert.equal(res.headers.get('access-control-allow-origin'), 'https://app.test');
+        assert.match(res.headers.get('access-control-allow-methods'), /POST/);
+        assert.equal(await res.text(), '');
+    });
+
+    it('404 / 405 也经过全局中间件，因此带上跨域头', async () => {
+        const notFound = await fetch(`${base}/missing`, { headers: { origin: 'https://app.test' } });
+        assert.equal(notFound.status, 404);
+        assert.equal(notFound.headers.get('access-control-allow-origin'), 'https://app.test');
+
+        const notAllowed = await fetch(`${base}/x`, { method: 'DELETE', headers: { origin: 'https://app.test' } });
+        assert.equal(notAllowed.status, 405);
+        assert.equal(notAllowed.headers.get('allow'), 'GET, POST');
+        assert.equal(notAllowed.headers.get('access-control-allow-origin'), 'https://app.test');
+    });
+
+    it('全局中间件覆盖 404 / 405 / 命中，命中时路由级中间件仍只作用于该路由', async () => {
+        seen.length = 0;
+        const routed = [];
+        const scoped = new Router();
+        scoped.use(async (ctx, next) => { seen.push(`G ${ctx.method} ${ctx.path}`); await next(); });
+        scoped.get('/hit', () => ({ ok: true }), { middleware: [async (ctx, next) => { routed.push('scoped'); await next(); }] });
+
+        const server = HttpServer.create({
+            router: scoped, serviceName: SERVICE_NAME, host: '127.0.0.1', port: 0,
+            gracefulShutdown: false, logLevel: 'error',
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(undefined)));
+        try {
+            const hit = await fetch(`http://127.0.0.1:${server.port}/hit`);
+            assert.deepEqual(await hit.json(), { ok: true });
+            const miss = await fetch(`http://127.0.0.1:${server.port}/nope`);
+            assert.equal(miss.status, 404);
+
+            assert.deepEqual(seen, ['G GET /hit', 'G GET /nope'], '全局中间件应覆盖未命中请求');
+            assert.deepEqual(routed, ['scoped'], '路由级中间件只应在命中时执行一次');
+        } finally {
+            await server.close();
         }
     });
 });

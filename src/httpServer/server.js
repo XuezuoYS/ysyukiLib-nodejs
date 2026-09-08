@@ -16,7 +16,9 @@ import { ServerLogger } from './serverLogger.js';
  * 2. 解析请求体（大小上限 + 非法 JSON 直接 400）；
  *    按 Content-Type 选择解析器：`application/x-www-form-urlencoded` 走 parseFormBody，
  *    其余（含缺失）走 parseJsonBody；两者都只产出普通对象，HttpReq.getPostData 写法一致；
- * 3. 路由匹配与中间件洋葱（全局 + 分组 + 路由级 + 处理器）；
+ * 3. 中间件洋葱与路由分发（顺序：全局中间件 → 路由决策 → 分组/路由级中间件 → 处理器）；
+ *    全局中间件**先于**路由决策执行，因此 404 / 405 也经过它（CORS 预检、全局鉴权、
+ *    访问日志得以覆盖未命中与方法不符的请求；预检不再被 405 提前拒掉）；
  * 4. 唯一兜底出口，共五条分支：
  *    - 404 未命中：`{name, error: '404 not found', path, method}`；
  *    - 405 方法不符：同形状 `{name, error: '405 method not allowed', path, method}` + `Allow` 头；
@@ -462,29 +464,12 @@ export class HttpServer {
             ctx.rawBody = await this.#readBody(req, method);
             ctx.body = isForm ? parseFormBody(ctx.rawBody) : parseJsonBody(ctx.rawBody);
 
-            const match = this.#options.router.match(path, method);
-            if (match.status === 'notFound') {
-                await runWithContext(ctx, () => this.#writeNotFound(ctx));
-                return;
-            }
-            if (match.status === 'methodNotAllowed') {
-                await runWithContext(ctx, () => this.#writeMethodNotAllowed(ctx, match.allowed));
-                return;
-            }
-
-            ctx.params = match.params;
-            const handler = match.target;
-
             await runWithContext(ctx, async () => {
+                // 全局中间件先于路由决策执行：CORS 预检 / 全局鉴权 / 访问日志等需要
+                // 覆盖未命中与方法不符的请求（否则预检会先被 405 拒掉，跨域请求直接失败）。
                 await compose([
                     ...this.#options.router.globalMiddleware,
-                    ...match.middleware,
-                    async (current) => {
-                        const result = await handler(current.params, current);
-                        if (result !== undefined && !current.res.headersSent && !current.res.writableEnded) {
-                            HttpRes.jsonRes(result);
-                        }
-                    },
+                    (current) => this.#dispatch(current, res),
                 ])(ctx);
 
                 if (this.#options.emptyResponse && !res.headersSent && !res.writableEnded) {
@@ -500,6 +485,42 @@ export class HttpServer {
         } catch (err) {
             await runWithContext(ctx, () => this.#handleError(err, ctx));
         }
+    }
+
+    /**
+     * 路由决策与分发（全局中间件链的末端）
+     *
+     * 未命中 → 404；方法不符 → 405（带 `Allow`）；命中 → 分组/路由级中间件 + 处理器。
+     * 404 / 405 也经由本方法写出，因此全局中间件已先行执行（预检、鉴权、访问日志均覆盖）。
+     *
+     * @param {import('./context.js').HttpContext} ctx 请求上下文
+     * @param {import('node:http').ServerResponse} res 响应对象
+     * @returns {Promise<void>}
+     */
+    async #dispatch(ctx, res) {
+        const match = this.#options.router.match(ctx.path, ctx.method);
+
+        if (match.status === 'notFound') {
+            this.#writeNotFound(ctx);
+            return;
+        }
+        if (match.status === 'methodNotAllowed') {
+            this.#writeMethodNotAllowed(ctx, match.allowed);
+            return;
+        }
+
+        ctx.params = match.params;
+        const handler = match.target;
+
+        await compose([
+            ...match.middleware,
+            async (current) => {
+                const result = await handler(current.params, current);
+                if (result !== undefined && !current.res.headersSent && !current.res.writableEnded) {
+                    HttpRes.jsonRes(result);
+                }
+            },
+        ])(ctx);
     }
 
     /**

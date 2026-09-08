@@ -86,6 +86,11 @@ HttpServer.create({ router, serviceName: 'example-service' })
 响应与错误契约：JSON 输出 4 空格缩进、斜杠与非 ASCII 不转义；错误统一
 `{ "status": message }`；404 / 405 维持 `{ name, error, path, method }` 形状（405 附带 `Allow` 头）。
 
+执行顺序：**全局中间件（`router.use`）先于路由决策**，因此 404 / 405 也会经过全局中间件
+（CORS 预检、全局鉴权、访问日志都覆盖未命中与方法不符的请求；`Middleware.cors()` 的
+OPTIONS 预检因此能正常短路返回 204，而不是被 405 提前拒掉）。分组中间件与
+`options.middleware` 仍只作用于命中路由。
+
 请求体两种来源，**取值写法完全一致**：
 
 | `Content-Type` | 解析器 | `HttpReq.getPostData` 校验语义 |
@@ -282,6 +287,12 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     写日志不再每条同步 `existsSync`（实测 8.56µs/条 → 0.37µs/条，降幅 96%）。
     `Config.setRootDir()` / `Config.devConfigFile` 赋值自动失效；同一路径上增删
     `dev.config.json` 需显式 `Logger.resetDevCache()`（此前为实时检查，代价是每条日志一次 stat）。
+
+16. **全局中间件先于路由决策**（本次，行为变更）：此前路由匹配（含 404/405）先执行，
+    全局中间件只在命中路由时运行——导致 `Middleware.cors()` 的 OPTIONS 预检被 405 拒掉，
+    真实浏览器跨域请求直接失败。现改为全局中间件包裹路由决策，404/405 也经过它
+    （跨域头、鉴权、访问日志均覆盖）；分组/路由级中间件仍只作用于命中路由。
+    顺带：HEAD 响应补 `Content-Length`；中间件漏调 `next()` 记 WARN。
 
 ## 从旧 API 迁移（宿主改造用）
 
