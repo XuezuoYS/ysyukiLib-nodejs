@@ -38,7 +38,7 @@ src/
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
 | `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` | 入站 HTTP 服务端子域入口（barrel） |
-| `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭 |
+| `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false） |
 | `ysyuki-lib-on-nodejs/httpServer/context` | `runWithContext` / `getCurrentContext` / `tryGetCurrentContext` | 请求上下文（AsyncLocalStorage） |
 | `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
 | `ysyuki-lib-on-nodejs/httpServer/httpRes` | `HttpRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |

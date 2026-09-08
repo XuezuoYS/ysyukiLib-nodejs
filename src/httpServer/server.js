@@ -20,7 +20,9 @@ import { ServerLogger } from './serverLogger.js';
  *    - AppError：`{status: message}`，状态码取 `statusCode`；
  *    - 未捕获异常：记 error 日志（堆栈只进日志），输出 500 `{status: '服务器内部错误'}`；
  *    - 响应已开始后发生异常：只记日志，不重复写出。
- * 5. 超时与优雅关闭（SIGINT/SIGTERM → 停止接收新连接 → 空闲连接回收）。
+ * 5. 超时与优雅关闭：SIGINT/SIGTERM 由**进程级共享注册表**统一处理（每进程只装一组监听器，
+ *    listen 时注册、close 时注销），一次信号关闭全部已注册实例；到 shutdownTimeout 强制断开
+ *    剩余连接；仅当所有已注册实例 exitOnShutdown 均为 true 时才结束进程（默认 false，交回宿主）。
  *
  * 处理器返回值：非 undefined 即自动经 HttpRes.jsonRes 序列化为 JSON 200；
  * 未产生任何输出时补一个空 200（`emptyResponse: false` 可关闭）。
@@ -41,9 +43,9 @@ import { ServerLogger } from './serverLogger.js';
  * @property {number} [requestTimeout] 请求整体超时（毫秒）
  * @property {number} [keepAliveTimeout] 长连接空闲超时（毫秒）
  * @property {boolean} [emptyResponse] 处理器无输出时补空 200
- * @property {boolean} [gracefulShutdown] 监听 SIGINT/SIGTERM 做优雅关闭
- * @property {boolean} [exitOnShutdown] 优雅关闭完成后是否结束进程
- * @property {number} [shutdownTimeout] 强制退出前的等待上限（毫秒）
+ * @property {boolean} [gracefulShutdown] 注册到进程级信号注册表，收到 SIGINT/SIGTERM 时优雅关闭
+ * @property {boolean} [exitOnShutdown] 优雅关闭完成后是否结束进程；仅当所有已注册实例均为 true 才 process.exit
+ * @property {number} [shutdownTimeout] 关闭超时（毫秒）：到点强制断开剩余连接
  * @property {(err: any, ctx: import('./context.js').HttpContext) => void} [onError] 异常钩子（含 AppError）
  */
 
@@ -52,6 +54,9 @@ const DEFAULT_BODY_LIMIT = 1024 * 1024;
 
 /** 默认服务名（404/405 响应体 name 字段） */
 const DEFAULT_SERVICE_NAME = 'http-server';
+
+/** 优雅关闭监听的信号（进程级只装一组监听器，多实例共享） */
+const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 
 /**
  * 路径标准化
@@ -140,10 +145,16 @@ export class HttpServer {
     #server = null;
 
     /**
-     * 优雅关闭是否已安装
-     * @type {boolean}
+     * 进程级优雅关闭注册表（listen 时加入，close 时移出；进程内所有实例共享一组信号监听器）
+     * @type {Set<HttpServer>}
      */
-    #signalsInstalled = false;
+    static #shutdownRegistry = new Set();
+
+    /**
+     * 当前已安装的进程信号监听器（signal -> handler；注册表为空时清空）
+     * @type {Map<string, () => void>}
+     */
+    static #signalHandlers = new Map();
 
     /**
      * @param {HttpServerOptions} options 选项
@@ -164,7 +175,7 @@ export class HttpServer {
             keepAliveTimeout: options.keepAliveTimeout ?? 5_000,
             emptyResponse: options.emptyResponse ?? true,
             gracefulShutdown: options.gracefulShutdown ?? true,
-            exitOnShutdown: options.exitOnShutdown ?? true,
+            exitOnShutdown: options.exitOnShutdown ?? false,
             shutdownTimeout: options.shutdownTimeout ?? 10_000,
             onError: options.onError ?? null,
         };
@@ -220,7 +231,8 @@ export class HttpServer {
         });
 
         if (this.#options.gracefulShutdown) {
-            this.#installSignalHandlers();
+            HttpServer.#shutdownRegistry.add(this);
+            HttpServer.#installSignalHandlers();
         }
 
         return this;
@@ -232,6 +244,12 @@ export class HttpServer {
      * @returns {Promise<void>} 关闭完成
      */
     async close() {
+        // 先从进程级注册表注销：注册表清空后移除信号监听器（已关闭实例不再响应信号）
+        HttpServer.#shutdownRegistry.delete(this);
+        if (HttpServer.#shutdownRegistry.size === 0) {
+            HttpServer.#uninstallSignalHandlers();
+        }
+
         const server = this.#server;
         if (server === null) {
             return;
@@ -250,34 +268,78 @@ export class HttpServer {
     }
 
     /**
-     * 安装 SIGINT/SIGTERM 优雅关闭
+     * 安装进程级信号监听（注册表从空变为非空时安装一次，同进程多实例共享）
      */
-    #installSignalHandlers() {
-        if (this.#signalsInstalled) {
+    static #installSignalHandlers() {
+        if (HttpServer.#signalHandlers.size > 0) {
             return;
         }
-        this.#signalsInstalled = true;
-
-        for (const signal of ['SIGINT', 'SIGTERM']) {
-            process.once(signal, () => {
-                const startedAt = Date.now();
-                ServerLogger.info('收到退出信号，开始优雅关闭', { signal });
-                const timer = setTimeout(() => {
-                    ServerLogger.warn('优雅关闭超时，强制退出', { signal, ms: Date.now() - startedAt });
-                    if (this.#options.exitOnShutdown) {
-                        process.exit(1);
-                    }
-                }, this.#options.shutdownTimeout);
-                timer.unref();
-
-                void this.close().then(() => {
-                    clearTimeout(timer);
-                    ServerLogger.shutdown(signal, Date.now() - startedAt);
-                    if (this.#options.exitOnShutdown) {
-                        process.exit(0);
-                    }
+        for (const signal of SHUTDOWN_SIGNALS) {
+            const handler = () => {
+                void HttpServer.#shutdownAll(signal).catch((err) => {
+                    // 关闭流程自身异常不得变成未处理拒绝（会终止进程且无从排查）
+                    ServerLogger.error('优雅关闭异常', err, { signal });
                 });
-            });
+            };
+            HttpServer.#signalHandlers.set(signal, handler);
+            process.once(signal, handler);
+        }
+    }
+
+    /**
+     * 移除进程级信号监听（注册表清空后调用；信号触发时也会先移除，避免重复进入关闭流程）
+     */
+    static #uninstallSignalHandlers() {
+        for (const [signal, handler] of HttpServer.#signalHandlers) {
+            process.off(signal, handler);
+        }
+        HttpServer.#signalHandlers.clear();
+    }
+
+    /**
+     * 收到退出信号：关闭注册表中的全部实例
+     *
+     * 到 shutdownTimeout 强制断开剩余连接；仅当所有实例 exitOnShutdown 均为 true 时结束进程。
+     *
+     * @param {string} signal 触发信号
+     * @returns {Promise<void>}
+     */
+    static async #shutdownAll(signal) {
+        HttpServer.#uninstallSignalHandlers();
+
+        const servers = [...HttpServer.#shutdownRegistry];
+        if (servers.length === 0) {
+            return;
+        }
+
+        const startedAt = Date.now();
+        ServerLogger.info('收到退出信号，开始优雅关闭', { signal, servers: servers.length });
+
+        // 快照底层服务引用：close() 会先把实例的 #server 置空，
+        // 超时回调必须靠这份快照才能强制断开剩余连接
+        const targets = servers.map((server) => ({ instance: server, node: server.#server }));
+
+        // 超时上限取各实例的最大值，避免单个实例的短超时提前掐断其它实例的在途请求
+        const timeoutMs = servers.reduce((max, server) => Math.max(max, server.#options.shutdownTimeout), 0);
+        let isTimeout = false;
+        const timer = setTimeout(() => {
+            isTimeout = true;
+            ServerLogger.warn('优雅关闭超时，强制断开剩余连接', { signal, ms: Date.now() - startedAt });
+            for (const target of targets) {
+                target.node?.closeAllConnections();
+            }
+        }, timeoutMs);
+        timer.unref();
+
+        await Promise.all(targets.map((target) => target.instance.close().catch((err) => {
+            ServerLogger.error('关闭实例失败', err, { signal });
+        })));
+        clearTimeout(timer);
+        ServerLogger.shutdown(signal, Date.now() - startedAt);
+
+        // 退出进程需所有实例一致同意（默认 false：交回宿主决定）
+        if (servers.every((server) => server.#options.exitOnShutdown)) {
+            process.exit(isTimeout ? 1 : 0);
         }
     }
 

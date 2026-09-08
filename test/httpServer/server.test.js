@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, describe, it } from 'node:test';
+import { after, afterEach, describe, it } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -322,5 +322,119 @@ describe('HttpServer：HTTP 语义', () => {
         });
         assert.deepEqual(await (await fetch(`${base}/v1/in`)).json(), { scope: 'v1' });
         assert.deepEqual(await (await fetch(`${base}/out`)).json(), { scope: null });
+    });
+});
+
+describe('HttpServer：优雅关闭（进程级共享信号注册）', () => {
+    /** 基线监听器数量（本文件其它用例均为 gracefulShutdown: false，不注册信号） */
+    const baseline = {
+        SIGINT: process.listenerCount('SIGINT'),
+        SIGTERM: process.listenerCount('SIGTERM'),
+    };
+
+    /** @type {HttpServer[]} */
+    const gracefulServers = [];
+
+    afterEach(async () => {
+        await Promise.all(gracefulServers.map((server) => server.close()));
+        gracefulServers.length = 0;
+    });
+
+    /**
+     * 启动一个注册信号监听的临时服务
+     *
+     * @param {Record<string, any>} [options] 选项覆盖
+     * @param {(router: Router) => void} [configure] 路由配置
+     * @returns {Promise<{server: HttpServer, base: string}>} 实例与基地址
+     */
+    async function startGraceful(options = {}, configure = (router) => {
+        router.get('/ping', () => ({ ok: true }));
+    }) {
+        const router = new Router();
+        configure(router);
+        const server = HttpServer.create({
+            router,
+            serviceName: SERVICE_NAME,
+            host: '127.0.0.1',
+            port: 0,
+            gracefulShutdown: true,
+            ...options,
+        });
+        await new Promise((resolve) => {
+            server.listen(0, '127.0.0.1', () => resolve(undefined));
+        });
+        gracefulServers.push(server);
+        return { server, base: `http://127.0.0.1:${server.port}` };
+    }
+
+    /**
+     * 等待服务不再接受连接
+     *
+     * @param {string} base 基地址
+     * @returns {Promise<void>}
+     */
+    async function waitClosed(base) {
+        for (let i = 0; i < 200; i += 1) {
+            try {
+                await fetch(`${base}/ping`);
+            } catch {
+                return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error(`服务未在预期时间内关闭：${base}`);
+    }
+
+    it('多实例只装一组进程监听器，全部 close 后移除', async () => {
+        const a = await startGraceful();
+        const b = await startGraceful();
+        assert.equal(process.listenerCount('SIGTERM'), baseline.SIGTERM + 1);
+        assert.equal(process.listenerCount('SIGINT'), baseline.SIGINT + 1);
+
+        await a.server.close();
+        assert.equal(process.listenerCount('SIGTERM'), baseline.SIGTERM + 1, '仍有实例注册时应保留监听器');
+
+        await b.server.close();
+        assert.equal(process.listenerCount('SIGTERM'), baseline.SIGTERM);
+        assert.equal(process.listenerCount('SIGINT'), baseline.SIGINT);
+    });
+
+    it('收到 SIGTERM：关闭全部已注册实例并移除监听器（默认不退出进程）', async () => {
+        const a = await startGraceful();
+        const b = await startGraceful();
+
+        process.emit('SIGTERM');
+
+        await waitClosed(a.base);
+        await waitClosed(b.base);
+        assert.equal(process.listenerCount('SIGTERM'), baseline.SIGTERM);
+        assert.equal(process.listenerCount('SIGINT'), baseline.SIGINT);
+    });
+
+    it('仅部分实例 exitOnShutdown 为 true：不结束进程', async () => {
+        const a = await startGraceful({ exitOnShutdown: true });
+        const b = await startGraceful({ exitOnShutdown: false });
+
+        process.emit('SIGTERM');
+
+        await waitClosed(a.base);
+        await waitClosed(b.base);
+        // 能执行到这一行即证明进程未被结束
+        assert.equal(process.listenerCount('SIGTERM'), baseline.SIGTERM);
+    });
+
+    it('关闭超时：强制断开在途连接', async () => {
+        const { base } = await startGraceful({ shutdownTimeout: 80 }, (router) => {
+            router.get('/hang', () => new Promise(() => {}));
+        });
+
+        const pending = fetch(`${base}/hang`);
+        pending.catch(() => {}); // 避免未处理的拒绝
+        await new Promise((resolve) => setTimeout(resolve, 30)); // 等请求到达服务端
+
+        process.emit('SIGTERM');
+
+        await assert.rejects(() => pending);
+        assert.equal(process.listenerCount('SIGTERM'), baseline.SIGTERM);
     });
 });
