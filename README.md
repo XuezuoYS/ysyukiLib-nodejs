@@ -37,14 +37,14 @@ src/
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道）；`Logger.create({ level })` 创建等级独立的子 logger |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
-| `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` | 入站 HTTP 服务端子域入口（barrel） |
+| `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` / `encodeUrlParam` | 入站 HTTP 服务端子域入口（barrel） |
 | `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false，`logLevel` 可选） |
 | `ysyuki-lib-on-nodejs/httpServer/context` | `runWithContext` / `getCurrentContext` / `tryGetCurrentContext` | 请求上下文（AsyncLocalStorage） |
 | `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
 | `ysyuki-lib-on-nodejs/httpServer/httpRes` | `HttpRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
 | `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志（实例化：服务名与等级随实例，`new ServerLogger({ serviceName, level })`） |
-| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由） |
+| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` / `encodeUrlParam` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由、注册期正则护栏）；`encodeUrlParam` 为 URL 参数编码 |
 | `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId）；`cors` 默认 `origin: '*'`，`credentials: true` 须显式指定非 `'*'` 的 origin |
 | `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
 
@@ -201,6 +201,11 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
 8. **路由正则护栏**（本次）：`@` 自定义正则缺锚定时自动补 `^...$`（此前遗漏会变成子串匹配）；
    正则源超过 1024 字符注册即抛错；疑似灾难性回溯（嵌套量词，如 `(a+)+`）仅记 warn、不阻断注册。
    `@` 正则与 `addMatchTypes` 片段必须是静态、由开发者编写的字符串，禁止拼接请求数据。
+
+9. **反向路由编码**（本次，破坏性）：`Router.generate()` 默认对参数值做 URL 编码
+   （`{path:path}` / `{rest:all}` 按段编码、保留斜杠），可用 `generate(name, params, { encode: false })` 关闭；
+   新增 `encodeUrlParam(value, { keepSlash })` 供手工拼 URL 复用；`@` 自定义正则路由不再支持反向生成
+   （此前会静默返回正则源字符串）。
 
 ## 从旧 API 迁移（宿主改造用）
 

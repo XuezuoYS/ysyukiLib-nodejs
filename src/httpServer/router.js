@@ -17,6 +17,9 @@ import { Logger } from '../logger.js';
  *   status 为 hit / methodNotAllowed / notFound；路径命中而方法不符时给出 allowed（405 用）；
  * - HEAD 请求可命中 GET 路由（响应体由入口层按 HEAD 语义抑制）；
  * - 默认忽略尾斜杠（`trailingSlash: 'strict'` 可关闭）；
+ * - `generate` 默认对参数值做 URL 编码（`{path:path}` / `{rest:all}` 按段编码、保留斜杠），
+ *   可用 `generate(name, params, { encode: false })` 关闭；`@` 自定义正则路由不支持反向生成；
+ * - 手工拼 URL 时用 `encodeUrlParam(value, { keepSlash })`，与 `generate` 同一套编码规则；
  * - 未知类型在注册时即抛错（自定义类型用 `addMatchTypes` 追加）；
  * - 注册期正则护栏：`@` 模式与自定义类型片段超过 1024 字符直接抛错；疑似灾难性回溯
  *   （嵌套量词，如 `(a+)+`）仅 `Logger.warn` 提醒——该启发式存在误报（如 `(?:[0-9]+\.)+` 安全），
@@ -91,6 +94,26 @@ function guardPattern(source, origin) {
     if (NESTED_QUANTIFIER_PATTERN.test(source)) {
         PATTERN_GUARD_LOG.warn('路由正则疑似灾难性回溯（嵌套量词），请确认模式不含用户输入', { origin, source });
     }
+}
+
+/**
+ * URL 参数编码（反向路由与手工拼 URL 共用）
+ *
+ * 把变量安全地拼进 URL：编码后 `#` / `?` / `/` / 空格等结构字符变成 `%XX`，
+ * 不会再被解析成 URL 结构（`#` 之后的内容原本根本不会发给服务器）。
+ * 默认整段编码；`keepSlash: true` 保留 `/` 作为分隔符（跨斜杠类型 `{path:path}` / `{rest:all}` 用）。
+ *
+ * @param {any} value 原始值（非字符串经 String() 转换）
+ * @param {object} [options] 选项
+ * @param {boolean} [options.keepSlash] 是否保留斜杠作为路径分隔符
+ * @default options = {}
+ * @returns {string} 已编码的 URL 片段
+ */
+export function encodeUrlParam(value, options = {}) {
+    const text = String(value);
+    return options.keepSlash === true
+        ? text.split('/').map((segment) => encodeURIComponent(segment)).join('/')
+        : encodeURIComponent(text);
 }
 
 /**
@@ -338,26 +361,40 @@ export class Router {
     /**
      * 反向路由：按名称与参数生成 URL
      *
-     * 必填参数缺失时抛错（避免静默生成错误 URL）；可选段缺失时连同分隔符一起剥离。
+     * 必填参数缺失时抛错（避免静默生成错误 URL）；可选段缺失时连同分隔符一起剥离；
+     * 参数值默认经 `encodeUrlParam` 编码（可用 `options.encode: false` 关闭）。
      *
      * @param {string} routeName 路由名称
      * @param {Record<string, any>} [params] 替换占位符的参数
      * @default params = {}
+     * @param {object} [options] 选项
+     * @param {boolean} [options.encode] 是否编码参数值，默认 true
+     * @default options = {}
      * @returns {string} 生成的 URL
-     * @throws {Error} 路由名不存在，或必填参数缺失时抛出
+     * @throws {Error} 路由名不存在、必填参数缺失，或对 `@` 自定义正则路由调用时抛出
      */
-    generate(routeName, params = {}) {
+    generate(routeName, params = {}, options = {}) {
         if (!Object.prototype.hasOwnProperty.call(this.namedRoutes, routeName)) {
             throw new Error(`Route '${routeName}' does not exist.`);
         }
 
-        let url = this.basePath + this.namedRoutes[routeName];
+        const route = this.namedRoutes[routeName];
+        if (route.startsWith('@')) {
+            throw new Error(`Route '${routeName}' 使用 @ 自定义正则，不支持反向生成`);
+        }
+
+        const { encode = true } = options;
+        let url = this.basePath + route;
 
         for (const match of url.matchAll(BLOCK_PATTERN)) {
-            const [block, prefix, name, , optional] = match;
+            const [block, prefix, name, type, optional] = match;
 
             if (name !== '' && Object.prototype.hasOwnProperty.call(params, name)) {
-                url = url.split(block).join(prefix + String(params[name]));
+                const raw = String(params[name]);
+                const value = encode
+                    ? encodeUrlParam(raw, { keepSlash: type === 'path' || type === 'all' })
+                    : raw;
+                url = url.split(block).join(prefix + value);
                 continue;
             }
 

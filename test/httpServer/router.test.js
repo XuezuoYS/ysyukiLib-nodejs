@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Logger } from '#YukiLib/logger';
-import { Router } from '#YukiLib/httpServer/router';
+import { Router, encodeUrlParam } from '#YukiLib/httpServer/router';
 
 import { captureStdout } from '../loggerFixture.js';
 
@@ -314,6 +314,56 @@ describe('Router：generate 反向路由', () => {
 
     it('未知名抛错', () => {
         assert.throws(() => new Router().generate('nope'), /Route 'nope' does not exist/);
+    });
+});
+
+describe('Router：反向路由参数编码', () => {
+    it('encodeUrlParam：结构字符编码，keepSlash 保留分隔符', () => {
+        assert.equal(encodeUrlParam('AC/DC'), 'AC%2FDC');
+        assert.equal(encodeUrlParam('report#2'), 'report%232');
+        assert.equal(encodeUrlParam('a?b'), 'a%3Fb');
+        assert.equal(encodeUrlParam('a b'), 'a%20b');
+        assert.equal(encodeUrlParam('100%'), '100%25');
+        assert.equal(encodeUrlParam('中文'), '%E4%B8%AD%E6%96%87');
+        assert.equal(encodeUrlParam(42), '42');
+        assert.equal(encodeUrlParam('a/b c', { keepSlash: true }), 'a/b%20c');
+    });
+
+    it('generate 默认编码参数值：结构字符不再破坏 URL', () => {
+        const r = new Router();
+        r.map('GET', '/file/{name}', noop, 'file');
+        assert.equal(r.generate('file', { name: 'AC/DC' }), '/file/AC%2FDC');
+        assert.equal(r.generate('file', { name: 'report#2' }), '/file/report%232');
+        assert.equal(r.generate('file', { name: 'a?b' }), '/file/a%3Fb');
+        assert.equal(r.generate('file', { name: 'a b' }), '/file/a%20b');
+    });
+
+    it('generate：{path:path} 按段编码并保留斜杠', () => {
+        const r = new Router();
+        r.map('GET', '/view/{path:path}', noop, 'view');
+        assert.equal(r.generate('view', { path: 'a/b c' }), '/view/a/b%20c');
+        assert.equal(r.generate('view', { path: 'x#y/z' }), '/view/x%23y/z');
+    });
+
+    it('generate({ encode: false })：保留原始拼接行为（逃生开关）', () => {
+        const r = new Router();
+        r.map('GET', '/file/{name}', noop, 'file');
+        assert.equal(r.generate('file', { name: 'AC/DC' }, { encode: false }), '/file/AC/DC');
+    });
+
+    it('generate + match 往返：保留字符以百分号形式到达处理器（已知语义）', () => {
+        const r = new Router();
+        r.map('GET', '/file/{name}', noop, 'file');
+        const url = r.generate('file', { name: 'AC/DC' });
+        assert.equal(url, '/file/AC%2FDC');
+        // decodeURI 不解码保留字符，路由也不解码参数 → 处理器拿到仍编码的值
+        assert.deepEqual(r.match(url, 'GET').params, { name: 'AC%2FDC' });
+    });
+
+    it('@ 自定义正则路由不支持反向生成：抛明确错误', () => {
+        const r = new Router();
+        r.map('GET', '@^/raw/(?<n>[0-9]+)$', noop, 'raw');
+        assert.throws(() => r.generate('raw', { n: 5 }), /不支持反向生成/);
     });
 });
 

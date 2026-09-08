@@ -9,6 +9,7 @@ import { HttpServer } from '#YukiLib/httpServer/server';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Middleware } from '#YukiLib/httpServer/middleware';
 import { Router } from '#YukiLib/httpServer/router';
+import { encodeUrlParam } from '#YukiLib/httpServer/router';
 import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
 import { Router as AliasRouter } from '#YukiLib/httpServer';
 
@@ -24,7 +25,7 @@ describe('httpServer 子域入口与子路径导出', () => {
     it('barrel 导出服务端框架成员', () => {
         assert.deepEqual(
             Object.keys(httpServerBarrel).sort(),
-            ['AppError', 'HttpReq', 'HttpRes', 'HttpServer', 'Middleware', 'Router', 'ServerLogger'],
+            ['AppError', 'HttpReq', 'HttpRes', 'HttpServer', 'Middleware', 'Router', 'ServerLogger', 'encodeUrlParam'],
         );
     });
 
@@ -36,6 +37,7 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.equal(httpServerBarrel.Middleware, Middleware);
         assert.equal(httpServerBarrel.Router, Router);
         assert.equal(httpServerBarrel.ServerLogger, ServerLogger);
+        assert.equal(httpServerBarrel.encodeUrlParam, encodeUrlParam);
     });
 
     it('#YukiLib/httpServer 别名与子域 barrel 指向同一实现', () => {
@@ -56,5 +58,6 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.equal(typeof httpServerBarrel.HttpRes.jsonRes, 'function');
         assert.equal(typeof httpServerBarrel.Middleware.cors, 'function');
         assert.equal(typeof httpServerBarrel.ServerLogger.prototype.access, 'function');
+        assert.equal(typeof httpServerBarrel.encodeUrlParam, 'function');
     });
 });
