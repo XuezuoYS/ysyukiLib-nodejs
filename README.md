@@ -34,16 +34,16 @@ src/
 | 子路径 | 导出 | 作用 |
 | --- | --- | --- |
 | `ysyuki-lib-on-nodejs/config` | `Config` | 宿主根解析、`.env` / `config.json` / `dev.config.json` 读取 |
-| `ysyuki-lib-on-nodejs/logger` | `Logger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道） |
+| `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道）；`Logger.create({ level })` 创建等级独立的子 logger |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
 | `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` | 入站 HTTP 服务端子域入口（barrel） |
-| `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false） |
+| `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false，`logLevel` 可选） |
 | `ysyuki-lib-on-nodejs/httpServer/context` | `runWithContext` / `getCurrentContext` / `tryGetCurrentContext` | 请求上下文（AsyncLocalStorage） |
 | `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
 | `ysyuki-lib-on-nodejs/httpServer/httpRes` | `HttpRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
-| `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志包装（请求级日志 / 访问日志 / 生命周期） |
+| `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志（实例化：服务名与等级随实例，`new ServerLogger({ serviceName, level })`） |
 | `ysyuki-lib-on-nodejs/httpServer/router` | `Router` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由） |
 | `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId）；`cors` 默认 `origin: '*'`，`credentials: true` 须显式指定非 `'*'` 的 origin |
 | `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
@@ -149,6 +149,27 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 | `dev.config.json` | 否 | **存在即开发环境**：日志全级别、`getConfig` 走 dev 覆盖链 |
 | `CA/cacert.pem` | 否 | HTTPS 自定义 CA；文件缺失时回退系统 CA |
 | `log/` | 否 | 自动创建；`app-YYYY-MM-DD.log`，保留最近 3 天 |
+
+## 日志等级与配置隔离
+
+- **入口级（`Logger` 静态成员）**：`Logger.now`（记录日期源，子 logger 不提供日期配置）、
+  `Logger.logDir`、`Logger.defaultLevel`（实时求值：宿主根存在 `dev.config.json` 即 `info`，否则 `warn`）；
+- **子 logger 级**：`Logger.create({ level })` 返回的 `SubLogger` 各自持有记录等级，
+  互不影响，也不影响根 `Logger`；`ServerLogger` 同样按实例隔离（服务名 + 等级）。
+- 等级为**阈值**语义：`warn` 记 warn+error，`info` 记全部，`error` 只记 error；
+  未显式设置时实时跟随 `Logger.defaultLevel`。
+
+```js
+import { Logger } from '#YukiLib/logger';
+import { HttpServer, Router } from '#YukiLib/httpServer';
+
+const access = Logger.create({ level: 'info' });  // 只影响这个子 logger
+access.info('访问明细');                            // 生产环境同样记录
+Logger.info('一般信息');                            // 生产环境默认 warn 阈值 → 丢弃
+
+const server = HttpServer.create({ router, serviceName: 'api', logLevel: 'info' });
+server.logger.level = 'warn';                       // 运行期调整本实例等级（不影响其它实例）
+```
 
 ## 与抽出前实现的差异
 

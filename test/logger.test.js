@@ -4,8 +4,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { Logger } from '#YukiLib/logger';
+import { Logger, SubLogger } from '#YukiLib/logger';
 import { Config } from '#YukiLib/config';
+
+import { captureStdout, parseLogLine } from './loggerFixture.js';
 
 /**
  * 测试基座：宿主根与日志目录重定向到临时目录；dev 在场文件由夹具控制（不依赖库目录状态）
@@ -22,42 +24,6 @@ after(() => {
     Config.setRootDir(null);
     rmSync(dir, { recursive: true, force: true });
 });
-
-/**
- * 解析一行结构化日志：`ISO时间\tLEVEL(定宽)\t消息[\t附加字段JSON]`
- * @param {string} line 原始行
- * @returns {{time: string, level: string, message: string, fields: Record<string, any>}} 解析结果
- */
-function parseLogLine(line) {
-    const [time, level, message, ...rest] = line.split('\t');
-    return {
-        time,
-        level: level.trimEnd(),
-        message,
-        fields: rest.length > 0 ? JSON.parse(rest.join('\t')) : {},
-    };
-}
-
-/**
- * 捕获一次函数执行期间写入 stdout 的日志行
- * @param {() => void} fn 执行体
- * @returns {{time: string, level: string, message: string, fields: Record<string, any>}[]} 解析后的日志条目
- */
-function captureStdout(fn) {
-    /** @type {string[]} */
-    const lines = [];
-    const original = process.stdout.write;
-    process.stdout.write = (chunk) => {
-        lines.push(String(chunk));
-        return true;
-    };
-    try {
-        fn();
-    } finally {
-        process.stdout.write = original;
-    }
-    return lines.join('').split('\n').filter((l) => l !== '').map(parseLogLine);
-}
 
 describe('Logger', () => {
     it('info 输出标准三段：时间/定宽级别/消息+字段段', () => {
@@ -110,6 +76,106 @@ describe('Logger', () => {
         } finally {
             Logger.logDir = current;
         }
+    });
+});
+
+describe('Logger：等级阈值与配置隔离', () => {
+    it('Logger.create 返回 SubLogger，默认跟随默认等级（dev 在场 → info）', () => {
+        const log = Logger.create();
+        assert.ok(log instanceof SubLogger);
+        assert.equal(log.level, 'info');
+        assert.deepEqual(captureStdout(() => log.info('子 logger info')).map((e) => e.level), ['INFO']);
+    });
+
+    it('等级为阈值：warn 记 warn+error，info 丢弃', () => {
+        const log = Logger.create({ level: 'warn' });
+        const entries = captureStdout(() => {
+            log.info('丢弃');
+            log.warn('留下');
+            log.error('也留下');
+        });
+        assert.deepEqual(entries.map((e) => e.message), ['留下', '也留下']);
+        assert.deepEqual(entries.map((e) => e.level), ['WARN', 'ERROR']);
+    });
+
+    it('等级为阈值：error 只记 error', () => {
+        const log = Logger.create({ level: 'error' });
+        const entries = captureStdout(() => {
+            log.info('丢弃');
+            log.warn('丢弃');
+            log.error('留下');
+        });
+        assert.deepEqual(entries.map((e) => e.message), ['留下']);
+    });
+
+    it('配置隔离：多个子 logger 与根 Logger 互不影响', () => {
+        const a = Logger.create({ level: 'error' });
+        const b = Logger.create({ level: 'info' });
+        const entries = captureStdout(() => {
+            a.info('a 丢弃');
+            b.info('b 留下');
+            Logger.info('根留下');
+        });
+        assert.deepEqual(entries.map((e) => e.message), ['b 留下', '根留下']);
+        assert.equal(a.level, 'error');
+        assert.equal(b.level, 'info');
+    });
+
+    it('等级可后改，且改一个不影响另一个；传 null 恢复跟随默认', () => {
+        const a = Logger.create({ level: 'error' });
+        const b = Logger.create({ level: 'error' });
+        a.level = 'info';
+        assert.equal(a.level, 'info');
+        assert.equal(b.level, 'error');
+
+        a.level = null;
+        assert.equal(a.level, 'info', 'dev 在场时默认等级为 info');
+    });
+
+    it('未知等级抛错（构造与赋值均校验）', () => {
+        assert.throws(() => Logger.create({ level: /** @type {any} */ ('debug') }), /未知的日志等级/);
+        const log = Logger.create();
+        assert.throws(() => {
+            log.level = /** @type {any} */ ('trace');
+        }, /未知的日志等级/);
+    });
+
+    it('默认等级实时跟随 isDev()：移除 dev.config.json 后同一实例立即不再记 info', () => {
+        const log = Logger.create();
+        rmSync(devFixture, { force: true });
+        try {
+            const entries = captureStdout(() => {
+                log.info('生产应丢弃');
+                log.warn('生产保留');
+            });
+            assert.deepEqual(entries.map((e) => e.message), ['生产保留']);
+        } finally {
+            writeFileSync(devFixture, '{}', 'utf8');
+        }
+
+        const restored = captureStdout(() => log.info('恢复 dev 后重新记录'));
+        assert.deepEqual(restored.map((e) => e.message), ['恢复 dev 后重新记录']);
+    });
+
+    it('子 logger 与根 Logger 共用文件通道，日期仅由 Logger.now 决定', () => {
+        const previousDir = Logger.logDir;
+        const realNow = Logger.now;
+        Logger.logDir = join(dir, 'shared');
+        Logger.now = () => new Date('2026-04-01T09:00:00');
+        try {
+            captureStdout(() => {
+                Logger.warn('根写入');
+                Logger.create({ level: 'warn' }).warn('子写入');
+            });
+        } finally {
+            Logger.now = realNow;
+        }
+
+        const text = readFileSync(join(Logger.logDir, 'app-2026-04-01.log'), 'utf8');
+        const lines = text.trim().split('\n').map(parseLogLine);
+        assert.deepEqual(lines.map((e) => e.message), ['根写入', '子写入']);
+        assert.ok(lines[0].time.startsWith('2026-04-01T09:00:00'), '时间戳同样来自 Logger.now');
+        Logger.logDir = previousDir;
     });
 });
 

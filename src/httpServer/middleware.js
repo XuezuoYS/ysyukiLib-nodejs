@@ -1,5 +1,4 @@
 import { HttpRes } from './httpRes.js';
-import { ServerLogger } from './serverLogger.js';
 
 /**
  * 内置可选中间件（opt-in，默认不启用）
@@ -71,13 +70,16 @@ export class Middleware {
     /**
      * 访问日志中间件（响应结束时输出，状态码为最终值）
      *
+     * 是否记录由所属 HttpServer 实例的 ServerLogger 等级决定（见 `HttpServer` 的 `logLevel`），
+     * 因此不同服务的访问日志等级互不影响。
+     *
      * @returns {MiddlewareFn} 中间件
      */
     static accessLog() {
         return async (ctx, next) => {
             const startedAt = Date.now();
             ctx.res.on('finish', () => {
-                ServerLogger.access(ctx, ctx.res.statusCode, Date.now() - startedAt);
+                ctx.logger.access(ctx.res.statusCode, Date.now() - startedAt);
             });
             await next();
         };

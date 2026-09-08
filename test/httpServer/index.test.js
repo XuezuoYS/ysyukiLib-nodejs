@@ -55,6 +55,6 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.equal(typeof httpServerBarrel.HttpServer.create, 'function');
         assert.equal(typeof httpServerBarrel.HttpRes.jsonRes, 'function');
         assert.equal(typeof httpServerBarrel.Middleware.cors, 'function');
-        assert.equal(typeof httpServerBarrel.ServerLogger.access, 'function');
+        assert.equal(typeof httpServerBarrel.ServerLogger.prototype.access, 'function');
     });
 });

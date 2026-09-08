@@ -2,6 +2,7 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 import { AppError } from './appError.js';
+import { Logger } from '../logger.js';
 import { runWithContext } from './context.js';
 import { HttpRes } from './httpRes.js';
 import { compose } from './onion.js';
@@ -46,6 +47,7 @@ import { ServerLogger } from './serverLogger.js';
  * @property {boolean} [gracefulShutdown] 注册到进程级信号注册表，收到 SIGINT/SIGTERM 时优雅关闭
  * @property {boolean} [exitOnShutdown] 优雅关闭完成后是否结束进程；仅当所有已注册实例均为 true 才 process.exit
  * @property {number} [shutdownTimeout] 关闭超时（毫秒）：到点强制断开剩余连接
+ * @property {'info'|'warn'|'error'} [logLevel] 服务器日志等级（省略时跟随 Logger 默认：开发 info / 生产 warn）
  * @property {(err: any, ctx: import('./context.js').HttpContext) => void} [onError] 异常钩子（含 AppError）
  */
 
@@ -134,9 +136,15 @@ export function parseJsonBody(rawBody) {
 export class HttpServer {
     /**
      * 选项（已归一化）
-     * @type {Required<Omit<HttpServerOptions, 'router'|'onError'>> & {router: import('./router.js').Router, onError: ((err: any, ctx: import('./context.js').HttpContext) => void)|null}}
+     * @type {Required<Omit<HttpServerOptions, 'router'|'onError'|'logLevel'>> & {router: import('./router.js').Router, logLevel: 'info'|'warn'|'error'|null, onError: ((err: any, ctx: import('./context.js').HttpContext) => void)|null}}
      */
     #options;
+
+    /**
+     * 本实例专属的服务器日志（服务名与等级随实例，互不影响）
+     * @type {ServerLogger}
+     */
+    #logger;
 
     /**
      * 底层 node:http 服务
@@ -177,10 +185,14 @@ export class HttpServer {
             gracefulShutdown: options.gracefulShutdown ?? true,
             exitOnShutdown: options.exitOnShutdown ?? false,
             shutdownTimeout: options.shutdownTimeout ?? 10_000,
+            logLevel: options.logLevel ?? null,
             onError: options.onError ?? null,
         };
 
-        ServerLogger.configure({ serviceName: this.#options.serviceName });
+        this.#logger = new ServerLogger({
+            serviceName: this.#options.serviceName,
+            level: this.#options.logLevel,
+        });
     }
 
     /**
@@ -200,6 +212,14 @@ export class HttpServer {
     get port() {
         const address = this.#server?.address();
         return address !== null && typeof address === 'object' ? address.port : this.#options.port;
+    }
+
+    /**
+     * 本实例的服务器日志（可在此调整等级：`server.logger.level = 'info'`）
+     * @returns {ServerLogger} 服务器日志
+     */
+    get logger() {
+        return this.#logger;
     }
 
     /**
@@ -226,7 +246,7 @@ export class HttpServer {
 
         this.#server = server;
         server.listen(port, host, () => {
-            ServerLogger.startup(host, this.port);
+            this.#logger.startup(host, this.port);
             callback?.();
         });
 
@@ -278,7 +298,7 @@ export class HttpServer {
             const handler = () => {
                 void HttpServer.#shutdownAll(signal).catch((err) => {
                     // 关闭流程自身异常不得变成未处理拒绝（会终止进程且无从排查）
-                    ServerLogger.error('优雅关闭异常', err, { signal });
+                    Logger.error('优雅关闭异常', { err, signal });
                 });
             };
             HttpServer.#signalHandlers.set(signal, handler);
@@ -313,18 +333,21 @@ export class HttpServer {
         }
 
         const startedAt = Date.now();
-        ServerLogger.info('收到退出信号，开始优雅关闭', { signal, servers: servers.length });
 
         // 快照底层服务引用：close() 会先把实例的 #server 置空，
         // 超时回调必须靠这份快照才能强制断开剩余连接
         const targets = servers.map((server) => ({ instance: server, node: server.#server }));
+
+        // 进程级事件（收到信号 / 超时）用首个实例的 logger 记录，附带实例数便于区分
+        const processLog = targets[0].instance.#logger;
+        processLog.info('收到退出信号，开始优雅关闭', { signal, servers: targets.length });
 
         // 超时上限取各实例的最大值，避免单个实例的短超时提前掐断其它实例的在途请求
         const timeoutMs = servers.reduce((max, server) => Math.max(max, server.#options.shutdownTimeout), 0);
         let isTimeout = false;
         const timer = setTimeout(() => {
             isTimeout = true;
-            ServerLogger.warn('优雅关闭超时，强制断开剩余连接', { signal, ms: Date.now() - startedAt });
+            processLog.warn('优雅关闭超时，强制断开剩余连接', { signal, ms: Date.now() - startedAt });
             for (const target of targets) {
                 target.node?.closeAllConnections();
             }
@@ -332,10 +355,14 @@ export class HttpServer {
         timer.unref();
 
         await Promise.all(targets.map((target) => target.instance.close().catch((err) => {
-            ServerLogger.error('关闭实例失败', err, { signal });
+            target.instance.#logger.error('关闭实例失败', err, { signal });
         })));
         clearTimeout(timer);
-        ServerLogger.shutdown(signal, Date.now() - startedAt);
+
+        const durationMs = Date.now() - startedAt;
+        for (const target of targets) {
+            target.instance.#logger.shutdown(signal, durationMs);
+        }
 
         // 退出进程需所有实例一致同意（默认 false：交回宿主决定）
         if (servers.every((server) => server.#options.exitOnShutdown)) {
@@ -377,7 +404,7 @@ export class HttpServer {
             state: {},
             logger: null,
         };
-        ctx.logger = ServerLogger.request(ctx);
+        ctx.logger = this.#logger.request(ctx);
 
         try {
             ctx.rawBody = await this.#readBody(req, method);
@@ -491,7 +518,7 @@ export class HttpServer {
         }
 
         if (ctx.res.headersSent || ctx.res.writableEnded) {
-            ServerLogger.error('响应已开始后发生异常', err, { path: ctx.path, method: ctx.method, requestId: ctx.requestId });
+            ctx.logger.error('响应已开始后发生异常', { err });
             return;
         }
 
@@ -500,7 +527,7 @@ export class HttpServer {
             return;
         }
 
-        ServerLogger.error('服务器内部错误', err, { path: ctx.path, method: ctx.method, requestId: ctx.requestId });
+        ctx.logger.error('服务器内部错误', { err });
         HttpRes.jsonRes({ status: '服务器内部错误' }, 500);
     }
 }

@@ -146,7 +146,7 @@ export function makeCtx(options = {}) {
         rawBody,
         requestId,
         state: {},
-        logger: { info() {}, warn() {}, error() {} },
+        logger: { info() {}, warn() {}, error() {}, access() {} },
     }));
 }
 

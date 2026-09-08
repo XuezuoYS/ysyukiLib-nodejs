@@ -43,6 +43,6 @@ describe('包入口与子路径导出', () => {
         assert.equal(typeof barrel.HttpServer.create, 'function');
         assert.equal(typeof barrel.HttpRes.jsonRes, 'function');
         assert.equal(typeof barrel.Middleware.cors, 'function');
-        assert.equal(typeof barrel.ServerLogger.access, 'function');
+        assert.equal(typeof barrel.ServerLogger.prototype.access, 'function');
     });
 });

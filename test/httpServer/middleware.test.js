@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 
 import { AppError } from '#YukiLib/httpServer/appError';
 import { Middleware } from '#YukiLib/httpServer/middleware';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
-import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
 import { compose } from '#YukiLib/httpServer/onion';
 
 import { makeCtx, makeResStub, runIn } from './contextFixture.js';
@@ -119,18 +118,22 @@ describe('Middleware.cors', () => {
 });
 
 describe('Middleware.accessLog', () => {
-    /** @type {any[]} */
-    let captured = [];
-    const original = ServerLogger.access;
-
-    afterEach(() => {
-        ServerLogger.access = original;
-        captured = [];
-    });
+    /**
+     * 构造带 access 捕获的上下文（访问日志由 ctx.logger.access 输出）
+     *
+     * @param {Record<string, any>} [options] makeCtx 选项
+     * @returns {{ctx: import('#YukiLib/httpServer/context').HttpContext, captured: any[]}} 上下文与捕获数组
+     */
+    function makeAccessCase(options = {}) {
+        const ctx = makeCtx(options);
+        /** @type {any[]} */
+        const captured = [];
+        ctx.logger.access = (status, ms) => captured.push({ status, ms });
+        return { ctx, captured };
+    }
 
     it('响应 finish 时输出访问日志，状态码为最终值', async () => {
-        ServerLogger.access = (ctx, status, ms) => captured.push({ status, ms });
-        const ctx = makeCtx({ method: 'POST', path: '/api/v1/x' });
+        const { ctx, captured } = makeAccessCase({ method: 'POST', path: '/api/v1/x' });
         await runIn(ctx, () => compose([
             Middleware.accessLog(),
             async () => {
@@ -144,8 +147,7 @@ describe('Middleware.accessLog', () => {
     });
 
     it('处理器未写响应时不输出（finish 未触发）', async () => {
-        ServerLogger.access = (ctx, status, ms) => captured.push({ status, ms });
-        const { ctx } = makeCase();
+        const { ctx, captured } = makeAccessCase();
         await runChain(Middleware.accessLog(), ctx);
         assert.equal(captured.length, 0);
     });

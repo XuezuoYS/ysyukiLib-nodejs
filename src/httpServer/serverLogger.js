@@ -1,28 +1,35 @@
 import { Logger } from '../logger.js';
 
 /**
- * 服务器日志包装（对基础设施 Logger 的 HTTP 场景定制）
+ * 服务器日志（对基础设施 Logger 的 HTTP 场景定制）
  *
- * Logger 属基础设施（`src/logger.js`），负责 stdout + 文件双通道与级别门控；
+ * Logger 属基础设施（`src/logger.js`），负责 stdout + 文件双通道、等级阈值与日期源；
  * ServerLogger 不重复实现落盘，只在 Logger 之上补齐服务器关心的三件事：
  * 1. 请求级子日志：自动附加 service / requestId / method / path，handler 内一行取用；
  * 2. 访问日志：一行输出状态码、耗时、IP 与 UA（accessLog 中间件调用）；
  * 3. 生命周期日志：启动、关闭、优雅退出。
  *
- * 级别门控沿用 Logger 语义（开发环境全级别，非开发环境仅 warn/error）；
- * 访问日志级别可用 `configure({ accessLevel })` 调整，便于生产按需保留。
+ * 配置隔离：**每个 ServerLogger 实例持有自己的子 logger**，服务名与记录等级都随实例，
+ * 互不影响，也不影响根 Logger 与其它子 logger。等级阈值语义与 Logger 一致
+ * （warn 记 warn+error、info 记全部、error 只记 error）；未显式设置时实时跟随
+ * `Logger.defaultLevel`（开发环境 info，否则 warn）。日期源只有 `Logger.now` 一个入口。
+ *
+ * @typedef {object} ServerLoggerOptions
+ * @property {string} [serviceName] 服务名（进入所有日志字段；空串则不输出该字段）
+ * @property {'info'|'warn'|'error'} [options.level] 记录等级；省略时跟随 Logger.defaultLevel
  *
  * @typedef {object} ServerLoggerRequestLog
  * @property {(message: string, fields?: Record<string, any>) => void} info 一般信息
  * @property {(message: string, fields?: Record<string, any>) => void} warn 警告
  * @property {(message: string, fields?: Record<string, any>) => void} error 错误
+ * @property {(statusCode: number, durationMs: number) => void} access 访问日志（响应结束时调用）
  *
  * 常用函数：
- * - ServerLogger.configure({ serviceName, accessLevel })：服务名与访问日志级别
- * - ServerLogger.request(ctx)：请求级日志
- * - ServerLogger.access(ctx, statusCode, durationMs)：访问日志
- * - ServerLogger.startup(host, port) / shutdown(signal, durationMs)
- * - ServerLogger.error(message, err, fields)：带堆栈的错误日志
+ * - new ServerLogger({ serviceName, level })：每个 HttpServer 实例持有一个
+ * - logger.request(ctx)：请求级日志
+ * - logger.access(ctx, statusCode, durationMs)：访问日志
+ * - logger.startup(host, port) / logger.shutdown(signal, durationMs)
+ * - logger.error(message, err, fields)：带堆栈的错误日志
  *
  */
 export class ServerLogger {
@@ -30,37 +37,45 @@ export class ServerLogger {
      * 服务名（进入所有日志字段，便于多服务日志汇聚后区分）
      * @type {string}
      */
-    static #serviceName = '';
+    #serviceName;
 
     /**
-     * 访问日志级别（info / warn / error）
-     * @type {'info'|'warn'|'error'}
+     * 该实例专属的子 logger（等级独立）
+     * @type {import('../logger.js').SubLogger}
      */
-    static #accessLevel = 'info';
+    #log;
 
     /**
-     * 配置服务名与访问日志级别
-     *
-     * @param {object} [options] 配置项
-     * @param {string} [options.serviceName] 服务名，空串表示不输出该字段
-     * @param {'info'|'warn'|'error'} [options.accessLevel] 访问日志级别
+     * @param {ServerLoggerOptions} [options] 选项
      * @default options = {}
      */
-    static configure(options = {}) {
-        if (options.serviceName !== undefined) {
-            ServerLogger.#serviceName = String(options.serviceName);
-        }
-        if (options.accessLevel !== undefined) {
-            ServerLogger.#accessLevel = options.accessLevel;
-        }
+    constructor(options = {}) {
+        this.#serviceName = options.serviceName === undefined ? '' : String(options.serviceName);
+        this.#log = Logger.create({ level: options.level });
     }
 
     /**
      * 当前服务名
      * @returns {string} 服务名
      */
-    static get serviceName() {
-        return ServerLogger.#serviceName;
+    get serviceName() {
+        return this.#serviceName;
+    }
+
+    /**
+     * 当前记录等级（阈值）
+     * @returns {'info'|'warn'|'error'} 等级
+     */
+    get level() {
+        return this.#log.level;
+    }
+
+    /**
+     * 设置记录等级；传 null 恢复跟随 Logger.defaultLevel
+     * @param {'info'|'warn'|'error'|null} level 等级
+     */
+    set level(level) {
+        this.#log.level = level;
     }
 
     /**
@@ -69,29 +84,30 @@ export class ServerLogger {
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      * @returns {ServerLoggerRequestLog} 请求级日志
      */
-    static request(ctx) {
-        const base = ServerLogger.#base({
+    request(ctx) {
+        const base = this.#base({
             requestId: ctx.requestId,
             method: ctx.method,
             path: ctx.path,
         });
         return {
-            info: (message, fields) => Logger.info(message, { ...base, ...(fields ?? {}) }),
-            warn: (message, fields) => Logger.warn(message, { ...base, ...(fields ?? {}) }),
-            error: (message, fields) => Logger.error(message, { ...base, ...(fields ?? {}) }),
+            info: (message, fields) => this.#log.info(message, { ...base, ...(fields ?? {}) }),
+            warn: (message, fields) => this.#log.warn(message, { ...base, ...(fields ?? {}) }),
+            error: (message, fields) => this.#log.error(message, { ...base, ...(fields ?? {}) }),
+            access: (statusCode, durationMs) => this.access(ctx, statusCode, durationMs),
         };
     }
 
     /**
-     * 输出一行访问日志
+     * 输出一行访问日志（是否记录由本实例等级阈值决定）
      *
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      * @param {number} statusCode HTTP 状态码
      * @param {number} durationMs 处理耗时（毫秒）
      */
-    static access(ctx, statusCode, durationMs) {
+    access(ctx, statusCode, durationMs) {
         const userAgent = ctx.req.headers['user-agent'];
-        const fields = ServerLogger.#base({
+        const fields = this.#base({
             requestId: ctx.requestId,
             method: ctx.method,
             path: ctx.path,
@@ -102,7 +118,7 @@ export class ServerLogger {
                 : String(ctx.req.headers['x-forwarded-for']).split(',')[0].trim(),
             ua: Array.isArray(userAgent) ? userAgent.join(', ') : (userAgent ?? ''),
         });
-        ServerLogger.#emit(ServerLogger.#accessLevel, 'access', fields);
+        this.#log.info('access', fields);
     }
 
     /**
@@ -112,8 +128,8 @@ export class ServerLogger {
      * @param {Record<string, any>} [fields] 附加字段
      * @default fields = {}
      */
-    static info(message, fields = {}) {
-        Logger.info(message, ServerLogger.#base(fields));
+    info(message, fields = {}) {
+        this.#log.info(message, this.#base(fields));
     }
 
     /**
@@ -123,28 +139,8 @@ export class ServerLogger {
      * @param {Record<string, any>} [fields] 附加字段
      * @default fields = {}
      */
-    static warn(message, fields = {}) {
-        Logger.warn(message, ServerLogger.#base(fields));
-    }
-
-    /**
-     * 服务启动日志
-     *
-     * @param {string} host 监听地址
-     * @param {number} port 监听端口
-     */
-    static startup(host, port) {
-        Logger.info('服务已启动', ServerLogger.#base({ host, port }));
-    }
-
-    /**
-     * 服务关闭日志（优雅退出完成）
-     *
-     * @param {string} signal 触发信号
-     * @param {number} durationMs 关闭耗时（毫秒）
-     */
-    static shutdown(signal, durationMs) {
-        Logger.info('服务已关闭', ServerLogger.#base({ signal, ms: Math.round(durationMs) }));
+    warn(message, fields = {}) {
+        this.#log.warn(message, this.#base(fields));
     }
 
     /**
@@ -155,8 +151,28 @@ export class ServerLogger {
      * @param {Record<string, any>} [fields] 附加字段
      * @default fields = {}
      */
-    static error(message, err, fields = {}) {
-        Logger.error(message, ServerLogger.#base({ ...fields, err }));
+    error(message, err, fields = {}) {
+        this.#log.error(message, this.#base({ ...fields, err }));
+    }
+
+    /**
+     * 服务启动日志
+     *
+     * @param {string} host 监听地址
+     * @param {number} port 监听端口
+     */
+    startup(host, port) {
+        this.#log.info('服务已启动', this.#base({ host, port }));
+    }
+
+    /**
+     * 服务关闭日志（优雅退出完成）
+     *
+     * @param {string} signal 触发信号
+     * @param {number} durationMs 关闭耗时（毫秒）
+     */
+    shutdown(signal, durationMs) {
+        this.#log.info('服务已关闭', this.#base({ signal, ms: Math.round(durationMs) }));
     }
 
     /**
@@ -165,28 +181,9 @@ export class ServerLogger {
      * @param {Record<string, any>} fields 字段
      * @returns {Record<string, any>} 附加服务名后的字段
      */
-    static #base(fields) {
-        return ServerLogger.#serviceName === ''
+    #base(fields) {
+        return this.#serviceName === ''
             ? fields
-            : { service: ServerLogger.#serviceName, ...fields };
-    }
-
-    /**
-     * 按级别输出（访问日志用）
-     *
-     * @param {'info'|'warn'|'error'} level 级别
-     * @param {string} message 日志消息
-     * @param {Record<string, any>} fields 附加字段
-     */
-    static #emit(level, message, fields) {
-        if (level === 'warn') {
-            Logger.warn(message, fields);
-            return;
-        }
-        if (level === 'error') {
-            Logger.error(message, fields);
-            return;
-        }
-        Logger.info(message, fields);
+            : { service: this.#serviceName, ...fields };
     }
 }
