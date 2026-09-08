@@ -5,6 +5,9 @@ import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Config } from '#YukiLib/config';
+import { Logger } from '#YukiLib/logger';
+
+import { captureStdout } from './loggerFixture.js';
 
 /**
  * 宿主项目根夹具：库自身目录不含 config.json / .env，测试必须自带根目录
@@ -18,6 +21,10 @@ writeFileSync(join(dir, 'config.json'), JSON.stringify({
 }), 'utf8');
 writeFileSync(join(dir, '.env'), 'YSYUKI_TEST_ENV_FILE_ONLY=from-file\nYSYUKI_TEST_ENV_BOTH=from-file\n', 'utf8');
 
+/** 日志目录重定向到临时目录，避免配置告警落盘污染库自身目录 */
+const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-cfg-log-'));
+Logger.logDir = logDir;
+
 // 系统环境优先的哨兵值，必须在首次 envRead 之前注入
 process.env.YSYUKI_TEST_ENV_BOTH = 'from-system';
 
@@ -26,7 +33,9 @@ Config.setRootDir(dir);
 after(() => {
     Config.setRootDir(null);
     delete process.env.YSYUKI_TEST_ENV_BOTH;
+    Logger.logDir = null;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(logDir, { recursive: true, force: true });
 });
 
 describe('Config：宿主项目根解析', () => {
@@ -115,6 +124,75 @@ describe('Config.getConfig', () => {
         Config.configRead();
         assert.equal(Config.isEnvLoaded, true);
         assert.equal(Config.isConfigLoaded, true);
+    });
+});
+
+describe('Config：config.json 不可用告警（M4）', () => {
+    it('文件缺失：告警一次并带上路径与原因，重复取值不刷屏', () => {
+        const bare = mkdtempSync(join(tmpdir(), 'ysyuki-warn-missing-'));
+        Config.setRootDir(bare);
+        try {
+            const entries = captureStdout(() => {
+                assert.equal(Config.getConfig('host'), false);
+                assert.equal(Config.getConfig('host'), false);
+                assert.equal(Config.getConfig('other'), false);
+            });
+            const warned = entries.filter((entry) => entry.message.includes('config.json 不存在'));
+            assert.equal(warned.length, 1, '同一宿主根只应告警一次');
+            assert.equal(warned[0].level, 'WARN');
+            assert.equal(warned[0].fields.file, join(bare, 'config.json'));
+            assert.match(warned[0].fields.reason, /ENOENT|no such file/i);
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(bare, { recursive: true, force: true });
+        }
+    });
+
+    it('解析失败：告警一次并带解析原因，且不含文件内容', () => {
+        const badDir = mkdtempSync(join(tmpdir(), 'ysyuki-warn-bad-'));
+        writeFileSync(join(badDir, 'config.json'), '{"secret":"SHOULD-NOT-LEAK",}', 'utf8');
+        Config.setRootDir(badDir);
+        try {
+            const entries = captureStdout(() => {
+                assert.equal(Config.getConfig('secret'), false);
+            });
+            const warned = entries.filter((entry) => entry.message.includes('读取或解析失败'));
+            assert.equal(warned.length, 1);
+            assert.equal(warned[0].level, 'WARN');
+            assert.equal(warned[0].fields.file, join(badDir, 'config.json'));
+            assert.ok(warned[0].fields.reason.length > 0);
+            assert.doesNotMatch(JSON.stringify(warned[0]), /SHOULD-NOT-LEAK/, '告警不得输出文件内容');
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(badDir, { recursive: true, force: true });
+        }
+    });
+
+    it('setRootDir 重置告警标记：换到新的缺失根目录会再次告警', () => {
+        const first = mkdtempSync(join(tmpdir(), 'ysyuki-warn-a-'));
+        const second = mkdtempSync(join(tmpdir(), 'ysyuki-warn-b-'));
+        try {
+            Config.setRootDir(first);
+            assert.equal(captureStdout(() => Config.getConfig('host')).filter((e) => e.message.includes('config.json 不存在')).length, 1);
+
+            Config.setRootDir(second);
+            const entries = captureStdout(() => Config.getConfig('host'));
+            const warned = entries.filter((entry) => entry.message.includes('config.json 不存在'));
+            assert.equal(warned.length, 1);
+            assert.equal(warned[0].fields.file, join(second, 'config.json'));
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(first, { recursive: true, force: true });
+            rmSync(second, { recursive: true, force: true });
+        }
+    });
+
+    it('config.json 正常时不告警', () => {
+        const entries = captureStdout(() => {
+            Config.setRootDir(dir);
+            assert.equal(Config.getConfig('port'), 8000);
+        });
+        assert.deepEqual(entries.filter((entry) => entry.message.includes('config.json')), []);
     });
 });
 

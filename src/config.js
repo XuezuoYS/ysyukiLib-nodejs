@@ -1,12 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 
+import { Logger } from './logger.js';
+
 /**
  * 读取配置功能库
  *
  * 使用 Config.getEnv(key) 获取环境变量（系统环境 + `.env` 文件，系统环境优先）
  *
- * 使用 Config.getConfig(key) 获取 config.json 文件中的配置项
+ * 使用 Config.getConfig(key) 获取 config.json 文件中的配置项；
+ * 文件缺失或解析失败时 getConfig 一律返回 false，并**经 Logger.warn 记录一次**警告
+ * （同一宿主根只告警一次；静默失败会让人误以为"配置生效了"）。
  *
  * 开发环境：宿主项目根存在 `dev.config.json`（不入库）时 Config.isDev() 为 true，
  * 取值优先级：dev.config.json[name] > config.json[`${name}.dev`] > config.json[name]；
@@ -23,7 +27,8 @@ import { dirname, join, resolve, sep } from 'node:path';
  * 一律经 Config.resolveFromRoot(...) 基于宿主项目根解析。
  *
  * 全部方法为静态，配置在首次调用时懒加载并在进程生命周期内缓存；
- * 项目为常驻进程，缓存跨请求有效。setRootDir() 会重置根目录缓存与配置缓存。
+ * 项目为常驻进程，缓存跨请求有效。setRootDir() 会重置根目录缓存、配置缓存与
+ * "已告警"标记（切换宿主根后重新评估是否需要告警）。
  *
  * `.env` 用 `process.loadEnvFile()` 原生加载（Node 20.6+），
  * 其语义为"已存在的 `process.env` 键不被覆盖"，即系统环境变量优先，文件缺失时忽略；
@@ -133,6 +138,12 @@ export class Config {
     static #devConfigFile = null;
 
     /**
+     * 是否已就"config.json 不可用"告警过（每次 setRootDir 重置）
+     * @type {boolean}
+     */
+    static #hasWarnedConfig = false;
+
+    /**
      * 显式指定宿主项目根目录（测试、非标准部署目录等场景）
      *
      * 会重置根目录缓存、配置缓存与 devConfigFile 显式指定值，
@@ -146,6 +157,7 @@ export class Config {
         Config.#rootDir = dir === null || dir === undefined ? null : resolve(String(dir));
         Config.#detectedRootDir = null;
         Config.#devConfigFile = null;
+        Config.#hasWarnedConfig = false;
         Config.isEnvLoaded = false;
         Config.isConfigLoaded = false;
         Config.isDevConfigLoaded = false;
@@ -235,6 +247,11 @@ export class Config {
     /**
      * 读取 config.json 文件的内容并转换为对象
      *
+     * 文件缺失或解析失败时返回 false（调用方静默回退），但会经 Logger.warn 记录一次
+     * 警告：`getConfig` 此时一律返回 false，配置实际未生效，静默失败最难排查。
+     * 警告按宿主根去重（setRootDir 重置），重复取值不会刷屏；只记录路径与原因，
+     * 不输出文件内容（避免把密钥写进日志）。
+     *
      * @returns {boolean} 读取成功返回 true，失败返回 false
      */
     static configRead() {
@@ -242,21 +259,47 @@ export class Config {
             return true;
         }
 
+        const file = Config.resolveFromRoot('config.json');
+
         let content;
         try {
-            content = readFileSync(Config.resolveFromRoot('config.json'), 'utf8');
-        } catch {
+            content = readFileSync(file, 'utf8');
+        } catch (err) {
+            Config.#warnConfigUnavailable(file, err);
             return false;
         }
 
         try {
             Config.configData = JSON.parse(stripBom(content));
-        } catch {
+        } catch (err) {
+            Config.#warnConfigUnavailable(file, err);
             return false;
         }
 
         Config.isConfigLoaded = true;
         return true;
+    }
+
+    /**
+     * config.json 不可用时的单次警告
+     *
+     * 同一次解析（同一宿主根）只告警一次：`isConfigLoaded` 在失败时保持 false，
+     * 每次 getConfig 都会重试读取，不去重会随取值次数刷屏。
+     *
+     * @param {string} file 配置文件绝对路径
+     * @param {any} err 失败原因
+     */
+    static #warnConfigUnavailable(file, err) {
+        if (Config.#hasWarnedConfig) {
+            return;
+        }
+        Config.#hasWarnedConfig = true;
+
+        const missing = err !== null && typeof err === 'object' && /** @type {any} */ (err).code === 'ENOENT';
+        Logger.warn(missing ? 'config.json 不存在，Config.getConfig 将一律返回 false' : 'config.json 读取或解析失败，Config.getConfig 将一律返回 false', {
+            file,
+            reason: err instanceof Error ? err.message : String(err),
+        });
     }
 
     /**

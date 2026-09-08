@@ -187,7 +187,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 
 | 路径 | 必需 | 说明 |
 | --- | --- | --- |
-| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源 |
+| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失或解析失败时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置） |
 | `.env` | 否 | `Config.getEnv(key)` 补充来源；系统环境变量优先，文件缺失静默忽略 |
 | `dev.config.json` | 否 | **存在即开发环境**：日志全级别、`getConfig` 走 dev 覆盖链 |
 | `CA/cacert.pem` | 否 | HTTPS 自定义 CA；文件缺失时回退系统 CA |
@@ -266,6 +266,11 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
 
 13. **兜底出口**（本次）：响应已开始后发生异常时 destroy 响应，客户端立即收到连接中断
     （此前只记日志，客户端会一直等到 `requestTimeout`）。
+
+14. **config.json 不可用告警**（本次）：`config.json` 缺失或解析失败时，`Config.getConfig`
+    仍返回 `false`（行为不变），但会经 `Logger.warn` 记录一次警告（含文件路径与失败原因，
+    不输出文件内容）；同一宿主根只告警一次，`setRootDir()` 重置。此前完全静默，
+    配置未生效却无从察觉。
 
 ## 从旧 API 迁移（宿主改造用）
 

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Config } from '#YukiLib/config';
+import { Logger } from '#YukiLib/logger';
 
 /**
  * dev.config.json 开发配置覆盖测试
@@ -14,6 +15,10 @@ import { Config } from '#YukiLib/config';
  */
 
 const dir = mkdtempSync(join(tmpdir(), 'ysyuki-devcfg-'));
+
+/** 日志目录重定向到临时目录，避免配置告警落盘污染库自身目录 */
+const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-devcfg-log-'));
+Logger.logDir = logDir;
 
 // 宿主根重定向到临时目录；必须在预置缓存之前
 Config.setRootDir(dir);
@@ -96,5 +101,7 @@ describe('Config.getConfig() 开发覆盖优先级', () => {
 
 after(() => {
     Config.setRootDir(null);
+    Logger.logDir = null;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(logDir, { recursive: true, force: true });
 });
