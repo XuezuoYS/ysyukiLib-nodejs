@@ -44,7 +44,7 @@ src/
 | `ysyuki-lib-on-nodejs/httpServer/httpRes` | `HttpRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
 | `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志（实例化：服务名与等级随实例，`new ServerLogger({ serviceName, level })`） |
-| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` / `encodeUrlParam` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由、注册期正则护栏）；`encodeUrlParam` 为 URL 参数编码 |
+| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` / `encodeUrlParam` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由、注册期正则护栏、块外字面量转义）；`encodeUrlParam` 为 URL 参数编码 |
 | `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId）；`cors` 默认 `origin: '*'`，`credentials: true` 须显式指定非 `'*'` 的 origin |
 | `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
 
@@ -293,6 +293,12 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     真实浏览器跨域请求直接失败。现改为全局中间件包裹路由决策，404/405 也经过它
     （跨域头、鉴权、访问日志均覆盖）；分组/路由级中间件仍只作用于命中路由。
     顺带：HEAD 响应补 `Content-Length`；中间件漏调 `next()` 记 WARN。
+
+17. **路由块外字面量转义**（本次，修复）：模板路由里**占位块之外**的部分此前被原样拼进匹配正则，
+    于是按正则语义生效——`.` 成了通配符（实测 `/a.b/{id:int}` 命中 `/axb/7`），`+` `(` `|` 等同理。
+    现按纯文本处理：编译时对字面量段转义 `[.*+?^${}()|[\]\\]`，`group()` 前缀与块后缀
+    （如 `/report.{id:int}.pdf`）一并生效。影响面：仅含占位符的模板路由（无占位符一直是字符串精确比较）；
+    `@` 自定义正则与 `addMatchTypes` 片段仍按正则解析、不转义；`generate()` 输出的仍是 URL 字面量。
 
 ## 从旧 API 迁移（宿主改造用）
 

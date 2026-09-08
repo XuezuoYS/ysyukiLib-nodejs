@@ -8,8 +8,10 @@ import { Logger } from '../logger.js';
  * - `{name:type}`：指定类型段，内置 int / float / bool / string / hex / alpha / path / all；
  * - `{name:type?}` 或 `{name?}`：可选段（缺失时该键不出现在 params）；
  * - `{path:path}`：跨斜杠捕获（非贪婪，至少一个字符）；`{rest:all}`：跨斜杠且包含尾斜杠；
+ * - 块外的其余部分（含 `group()` 前缀）是**路径字面量**：正则元字符编译时自动转义，
+ *   不参与匹配语义——`.` 不再充当通配符，故 `/a.b/{id:int}` 不会命中 `/axb/7`；
  * - `@` 前缀：整条路由按自定义正则匹配（命名组进 params，数字组丢弃；缺锚定时自动补 `^...$`）；
- * - `*`：通配全部路径。
+ * - `*`：整条路由恰为 `*` 时通配全部路径（模板里的 `*` 是字面量）。
  *
  * 行为约定：
  * - 匹配按注册顺序，先注册先命中；
@@ -116,20 +118,42 @@ export function encodeUrlParam(value, options = {}) {
         : encodeURIComponent(text);
 }
 
+/** 块外字面量里需要转义的正则元字符（含转义符自身；`/` 在 RegExp 源里无需转义） */
+const REGEX_METACHAR_PATTERN = /[.*+?^${}()|[\]\\]/g;
+
 /**
- * 按位置一次性应用替换（从后往前，避免下标位移）
+ * 转义路由模板里**块外**的字面量段
+ *
+ * 编译出的正则源里只有占位块是正则，其余都是路径字面量。不转义时 `.` 会变成通配符
+ * （实测 `/a.b/{id:int}` 命中 `/axb/7`），`(` `)` `{` 等在 `u` 标志下还会直接抛语法错误。
+ *
+ * @param {string} text 字面量文本
+ * @returns {string} 可安全嵌入正则源的文本
+ */
+function escapeRegexLiteral(text) {
+    return text.replace(REGEX_METACHAR_PATTERN, '\\$&');
+}
+
+/**
+ * 按原串位置一次性应用替换（不改动未被替换的字面量段）
  *
  * @param {string} source 原串
  * @param {{start: number, end: number, text: string}[]} edits 替换项（按任意顺序，互不重叠）
+ * @param {(text: string) => string} [escapeLiteral] 字面量段转换器；编译路由正则时用于转义元字符，
+ *   反向生成 URL 时不传（URL 里就该是原样字面量）
  * @returns {string} 替换结果
  */
-function applyEdits(source, edits) {
-    const sorted = [...edits].sort((a, b) => b.start - a.start);
-    let result = source;
+function applyEdits(source, edits, escapeLiteral) {
+    const plain = (/** @type {string} */ text) =>
+        escapeLiteral === undefined ? text : escapeLiteral(text);
+    const sorted = [...edits].sort((a, b) => a.start - b.start);
+    let result = '';
+    let cursor = 0;
     for (const edit of sorted) {
-        result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+        result += plain(source.slice(cursor, edit.start)) + edit.text;
+        cursor = edit.end;
     }
-    return result;
+    return result + plain(source.slice(cursor));
 }
 
 /**
@@ -493,7 +517,8 @@ export class Router {
      * 编译路由的正则（map 时调用一次并缓存）
      *
      * 无占位符且非 `@` 自定义正则时返回 regex: null（走字符串比较）；
-     * `@` 模式缺锚定时自动补 `^...$`，并对模式与自定义类型片段做注册期护栏。
+     * `@` 模式缺锚定时自动补 `^...$`，并对模式与自定义类型片段做注册期护栏；
+     * 模板模式下块外字面量段经 `escapeRegexLiteral` 转义，只有占位块参与正则语义。
      *
      * @param {string} route 路由模式
      * @returns {{regex: RegExp|null, paramTypes: Record<string, string>}} 锚定正则与参数类型表
@@ -510,7 +535,8 @@ export class Router {
             return { regex: null, paramTypes: {} };
         }
 
-        // 与 generate 同策略：按原串位置一次性替换，避免"替换结果里含块文本"被二次替换
+        // 与 generate 同策略：按原串位置一次性替换，避免"替换结果里含块文本"被二次替换；
+        // 差别在于这里块外的字面量段要转义成正则字面量（generate 输出的是 URL，原样即可）
         /** @type {{start: number, end: number, text: string}[]} */
         const edits = [];
         /** @type {Record<string, string>} */
@@ -539,7 +565,11 @@ export class Router {
             edits.push({ start, end: start + block.length, text: `(?:${blockRegex})${optionalMark}` });
         }
 
-        return { regex: new RegExp(`^${applyEdits(route, edits)}$`, 'u'), paramTypes };
+        return {
+            // 块外字面量段转义：只有占位块是正则，其余按纯文本匹配
+            regex: new RegExp(`^${applyEdits(route, edits, escapeRegexLiteral)}$`, 'u'),
+            paramTypes,
+        };
     }
 
     /**

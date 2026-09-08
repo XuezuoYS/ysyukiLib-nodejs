@@ -390,6 +390,96 @@ describe('Router：批量注册', () => {
     });
 });
 
+describe('Router：块外字面量的正则转义', () => {
+    it('点号是字面量：/a.b/{id:int} 不再命中 /axb/7', () => {
+        const r = new Router();
+        r.get('/a.b/{id:int}', noop);
+        assert.deepEqual(r.match('/a.b/7', 'GET').params, { id: 7 });
+        assert.equal(r.match('/axb/7', 'GET').status, 'notFound');
+        assert.equal(r.match('/a-b/7', 'GET').status, 'notFound');
+    });
+
+    it('量词与字符组元字符都是字面量', () => {
+        const r = new Router();
+        r.get('/v1+2/{id}', noop);
+        r.get('/a(b/{id:int}', noop);
+        r.get('/fee$/x/{id:int}', noop);
+        r.get('/[a]/{id:int}', noop);
+        r.get('/a|b/{id:int}', noop);
+        r.get('/a\\b/{id:int}', noop);
+        r.get('/a}b/{id:int}', noop);
+
+        assert.equal(r.match('/v1+2/abc', 'GET').status, 'hit');
+        assert.equal(r.match('/v1112/abc', 'GET').status, 'notFound');
+        assert.equal(r.match('/a(b/7', 'GET').status, 'hit');
+        assert.equal(r.match('/ab/7', 'GET').status, 'notFound');
+        assert.equal(r.match('/fee$/x/7', 'GET').status, 'hit');
+        assert.equal(r.match('/feex/7', 'GET').status, 'notFound');
+        assert.equal(r.match('/[a]/7', 'GET').status, 'hit');
+        assert.equal(r.match('/x[ay]/7', 'GET').status, 'notFound');
+        assert.equal(r.match('/a|b/7', 'GET').status, 'hit');
+        assert.equal(r.match('/a/7', 'GET').status, 'notFound');
+        assert.equal(r.match('/a\\b/7', 'GET').status, 'hit');
+        assert.equal(r.match('/ab/7', 'GET').status, 'notFound');
+        assert.equal(r.match('/a}b/7', 'GET').status, 'hit');
+        // 路径里的 `?` 先按查询串剥离（见"match 内剥离查询串"），故不构造 `?` 字面量路由
+    });
+
+    it('模板里的 * 是字面量（仅整条路由为 * 时通配）', () => {
+        const r = new Router();
+        r.get('/a*{id:int}', noop);
+        assert.deepEqual(r.match('/a*7', 'GET').params, { id: 7 });
+        assert.equal(r.match('/a7', 'GET').status, 'notFound');
+        assert.equal(r.match('/7', 'GET').status, 'notFound');
+
+        const catchall = new Router();
+        catchall.map('GET', '*', noop, 'catchall');
+        assert.equal(catchall.match('/whatever/deep', 'GET').name, 'catchall');
+    });
+
+    it('分组前缀与块后缀字面量同样转义', () => {
+        const r = new Router();
+        r.group('/v1.0', (v1) => {
+            v1.get('/x/{id:int}', noop, 'x');
+        });
+        assert.equal(r.match('/v1.0/x/5', 'GET').status, 'hit');
+        assert.equal(r.match('/v1x0/x/5', 'GET').status, 'notFound');
+        // generate 输出 URL 字面量（不带反斜杠），与转义后的正则仍能往返
+        assert.equal(r.generate('x', { id: 5 }), '/v1.0/x/5');
+        assert.equal(r.match(r.generate('x', { id: 5 }), 'GET').status, 'hit');
+
+        const suffix = new Router();
+        suffix.map('GET', '/report.{id:int}.pdf', noop, 'report');
+        assert.equal(suffix.generate('report', { id: 7 }), '/report.7.pdf');
+        assert.equal(suffix.match('/report.7.pdf', 'GET').status, 'hit');
+        assert.equal(suffix.match('/reportX7pdf', 'GET').status, 'notFound');
+    });
+
+    it('转义只作用于字面量：类型正则与可选段语义不变', () => {
+        const r = new Router();
+        r.get('/file.{ext:alpha}.{name}', noop);
+        assert.deepEqual(r.match('/file.tar.gz', 'GET').params, { ext: 'tar', name: 'gz' });
+        assert.equal(r.match('/filetargz', 'GET').status, 'notFound');
+
+        const opt = new Router();
+        opt.map('GET', '/opt/{page:int?}', noop, 'opt');
+        assert.deepEqual(opt.match('/opt', 'GET').params, {});
+        assert.deepEqual(opt.match('/opt/3', 'GET').params, { page: 3 });
+        assert.equal(opt.generate('opt'), '/opt');
+    });
+
+    it('@ 自定义正则不被转义（整条仍是正则）', () => {
+        const r = new Router();
+        r.map('GET', '@^/raw/(?<n>[0-9]+)$', noop);
+        assert.deepEqual(r.match('/raw/55', 'GET').params, { n: '55' });
+
+        const dot = new Router();
+        dot.map('GET', '@/raw/(?<n>[0-9]+)', noop);
+        assert.deepEqual(dot.match('/raw/55', 'GET').params, { n: '55' });
+        assert.equal(dot.match('/rawx55', 'GET').status, 'notFound');
+    });
+});
+
 describe('Router：注册期正则护栏与 @ 锚定', () => {
     it('@ 模式缺锚定：自动补 ^...$，不再子串命中', () => {
         const r = new Router();
