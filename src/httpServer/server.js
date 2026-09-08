@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { AppError } from './appError.js';
 import { runWithContext } from './context.js';
-import { JsonRes } from './jsonRes.js';
+import { HttpRes } from './httpRes.js';
 import { compose } from './onion.js';
 import { ServerLogger } from './serverLogger.js';
 
@@ -11,7 +11,7 @@ import { ServerLogger } from './serverLogger.js';
  * 入站 HTTP 服务入口（轻量框架的装配层）
  *
  * 职责：
- * 1. 建立请求上下文（AsyncLocalStorage），使 HttpReq / JsonRes 一行式可用；
+ * 1. 建立请求上下文（AsyncLocalStorage），使 HttpReq / HttpRes 一行式可用；
  * 2. 解析请求体（大小上限 + 非法 JSON 直接 400）；
  * 3. 路由匹配与中间件洋葱（全局 + 分组 + 路由级 + 处理器）；
  * 4. 唯一兜底出口，共五条分支：
@@ -22,7 +22,7 @@ import { ServerLogger } from './serverLogger.js';
  *    - 响应已开始后发生异常：只记日志，不重复写出。
  * 5. 超时与优雅关闭（SIGINT/SIGTERM → 停止接收新连接 → 空闲连接回收）。
  *
- * 处理器返回值：非 undefined 即自动经 JsonRes.jsonRes 序列化为 JSON 200；
+ * 处理器返回值：非 undefined 即自动经 HttpRes.jsonRes 序列化为 JSON 200；
  * 未产生任何输出时补一个空 200（`emptyResponse: false` 可关闭）。
  *
  * 签名约定：
@@ -341,13 +341,13 @@ export class HttpServer {
                     async (current) => {
                         const result = await handler(current.params, current);
                         if (result !== undefined && !current.res.headersSent && !current.res.writableEnded) {
-                            JsonRes.jsonRes(result);
+                            HttpRes.jsonRes(result);
                         }
                     },
                 ])(ctx);
 
                 if (this.#options.emptyResponse && !res.headersSent && !res.writableEnded) {
-                    JsonRes.fastResEmpty();
+                    HttpRes.fastResEmpty();
                 }
             });
         } catch (err) {
@@ -389,7 +389,7 @@ export class HttpServer {
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      */
     #writeNotFound(ctx) {
-        JsonRes.jsonRes({
+        HttpRes.jsonRes({
             name: this.#options.serviceName,
             error: '404 not found',
             path: ctx.path,
@@ -404,8 +404,8 @@ export class HttpServer {
      * @param {string[]} allowed 允许的方法
      */
     #writeMethodNotAllowed(ctx, allowed) {
-        JsonRes.header('Allow', allowed.join(', '));
-        JsonRes.jsonRes({
+        HttpRes.header('Allow', allowed.join(', '));
+        HttpRes.jsonRes({
             name: this.#options.serviceName,
             error: '405 method not allowed',
             path: ctx.path,
@@ -434,12 +434,12 @@ export class HttpServer {
         }
 
         if (err instanceof AppError) {
-            JsonRes.jsonRes({ status: err.message }, err.statusCode);
+            HttpRes.jsonRes({ status: err.message }, err.statusCode);
             return;
         }
 
         ServerLogger.error('服务器内部错误', err, { path: ctx.path, method: ctx.method, requestId: ctx.requestId });
-        JsonRes.jsonRes({ status: '服务器内部错误' }, 500);
+        HttpRes.jsonRes({ status: '服务器内部错误' }, 500);
     }
 }
 

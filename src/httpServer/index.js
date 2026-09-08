@@ -5,7 +5,7 @@
  * - HttpServer：服务入口（create / listen / 兜底出口 / 优雅关闭）；
  * - Router：模板路由（`{id}` / `{id:int}`）+ 分组 + 中间件洋葱；
  * - HttpReq：请求侧一行式取值（读当前请求上下文）；
- * - JsonRes：响应侧一行式输出（写当前请求上下文）；
+ * - HttpRes：响应侧一行式输出（写当前请求上下文）；
  * - ServerLogger：服务器日志包装（对基础设施 Logger 的 HTTP 场景定制）；
  * - AppError：业务可预期错误（入口唯一兜底出口的契约类型）。
  *
@@ -19,7 +19,7 @@
 export { AppError } from './appError.js';
 export { HttpReq } from './httpReq.js';
 export { HttpServer } from './server.js';
-export { JsonRes } from './jsonRes.js';
+export { HttpRes } from './httpRes.js';
 export { Middleware } from './middleware.js';
 export { Router } from './router.js';
 export { ServerLogger } from './serverLogger.js';

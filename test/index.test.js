@@ -18,7 +18,7 @@ describe('包入口与子路径导出', () => {
     it('barrel 导出全部 11 个类', () => {
         assert.deepEqual(
             Object.keys(barrel).sort(),
-            ['AppError', 'Config', 'FuncResult', 'HttpClient', 'HttpReq', 'HttpServer', 'JsonRes', 'Logger', 'Middleware', 'Router', 'ServerLogger'],
+            ['AppError', 'Config', 'FuncResult', 'HttpClient', 'HttpReq', 'HttpRes', 'HttpServer', 'Logger', 'Middleware', 'Router', 'ServerLogger'],
         );
     });
 
@@ -41,7 +41,7 @@ describe('包入口与子路径导出', () => {
         assert.ok(new barrel.AppError('x') instanceof barrel.AppError);
         assert.equal(typeof barrel.HttpReq.getPostData, 'function');
         assert.equal(typeof barrel.HttpServer.create, 'function');
-        assert.equal(typeof barrel.JsonRes.jsonRes, 'function');
+        assert.equal(typeof barrel.HttpRes.jsonRes, 'function');
         assert.equal(typeof barrel.Middleware.cors, 'function');
         assert.equal(typeof barrel.ServerLogger.access, 'function');
     });

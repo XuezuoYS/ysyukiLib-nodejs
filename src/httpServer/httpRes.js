@@ -21,7 +21,7 @@ import { getCurrentContext } from './context.js';
  * - header(name, value) / cookie(name, value, options) / status(httpCode)
  *
  */
-export class JsonRes {
+export class HttpRes {
     /**
      * 返回 JSON 数据（统一出口）
      *
@@ -33,7 +33,7 @@ export class JsonRes {
      * @default headers = null
      */
     static jsonRes(data, httpCode, headers = null) {
-        JsonRes.#write(getCurrentContext().res, data, httpCode, headers);
+        HttpRes.#write(getCurrentContext().res, data, httpCode, headers);
     }
 
     /**
@@ -42,7 +42,7 @@ export class JsonRes {
      * @param {number} [httpCode] HTTP 状态码；省略时沿用当前状态码
      */
     static fastResEmpty(httpCode) {
-        JsonRes.#write(getCurrentContext().res, null, httpCode, null);
+        HttpRes.#write(getCurrentContext().res, null, httpCode, null);
     }
 
     /**
@@ -60,7 +60,7 @@ export class JsonRes {
     static fastResRedirect(url, httpCode = 307) {
         // url 含 CR/LF 等非法头字符时由 setHeader 抛出 ERR_INVALID_CHAR，
         // 落入口唯一兜底出口转 500，不会写出被污染的响应头（响应头注入防护）
-        JsonRes.#write(getCurrentContext().res, null, httpCode, { Location: url });
+        HttpRes.#write(getCurrentContext().res, null, httpCode, { Location: url });
     }
 
     /**

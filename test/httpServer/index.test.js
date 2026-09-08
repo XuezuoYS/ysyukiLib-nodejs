@@ -6,7 +6,7 @@ import * as topBarrel from 'ysyuki-lib-on-nodejs';
 import { AppError } from '#YukiLib/httpServer/appError';
 import { HttpReq } from '#YukiLib/httpServer/httpReq';
 import { HttpServer } from '#YukiLib/httpServer/server';
-import { JsonRes } from '#YukiLib/httpServer/jsonRes';
+import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Middleware } from '#YukiLib/httpServer/middleware';
 import { Router } from '#YukiLib/httpServer/router';
 import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
@@ -24,7 +24,7 @@ describe('httpServer 子域入口与子路径导出', () => {
     it('barrel 导出服务端框架成员', () => {
         assert.deepEqual(
             Object.keys(httpServerBarrel).sort(),
-            ['AppError', 'HttpReq', 'HttpServer', 'JsonRes', 'Middleware', 'Router', 'ServerLogger'],
+            ['AppError', 'HttpReq', 'HttpRes', 'HttpServer', 'Middleware', 'Router', 'ServerLogger'],
         );
     });
 
@@ -32,7 +32,7 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.equal(httpServerBarrel.AppError, AppError);
         assert.equal(httpServerBarrel.HttpReq, HttpReq);
         assert.equal(httpServerBarrel.HttpServer, HttpServer);
-        assert.equal(httpServerBarrel.JsonRes, JsonRes);
+        assert.equal(httpServerBarrel.HttpRes, HttpRes);
         assert.equal(httpServerBarrel.Middleware, Middleware);
         assert.equal(httpServerBarrel.Router, Router);
         assert.equal(httpServerBarrel.ServerLogger, ServerLogger);
@@ -43,7 +43,7 @@ describe('httpServer 子域入口与子路径导出', () => {
     });
 
     it('子域 barrel 与顶层 barrel 为同一实现', () => {
-        for (const key of ['AppError', 'HttpReq', 'HttpServer', 'JsonRes', 'Middleware', 'Router', 'ServerLogger']) {
+        for (const key of ['AppError', 'HttpReq', 'HttpRes', 'HttpServer', 'Middleware', 'Router', 'ServerLogger']) {
             assert.equal(httpServerBarrel[key], topBarrel[key], `${key} 应为同一实现`);
         }
     });
@@ -53,7 +53,7 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.ok(new httpServerBarrel.AppError('x') instanceof httpServerBarrel.AppError);
         assert.equal(typeof httpServerBarrel.HttpReq.getPostData, 'function');
         assert.equal(typeof httpServerBarrel.HttpServer.create, 'function');
-        assert.equal(typeof httpServerBarrel.JsonRes.jsonRes, 'function');
+        assert.equal(typeof httpServerBarrel.HttpRes.jsonRes, 'function');
         assert.equal(typeof httpServerBarrel.Middleware.cors, 'function');
         assert.equal(typeof httpServerBarrel.ServerLogger.access, 'function');
     });

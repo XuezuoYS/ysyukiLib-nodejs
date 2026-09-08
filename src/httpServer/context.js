@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 /**
  * 入站 HTTP 请求上下文（AsyncLocalStorage 承载）
  *
- * 一行式门面 HttpReq / JsonRes 经本模块读取"当前请求"，
+ * 一行式门面 HttpReq / HttpRes 经本模块读取"当前请求"，
  * 因此 handler 内不必层层传递 ctx；并发请求各自独立，互不串数据。
  *
  * 生命周期：由 HttpServer 在请求入口 `runWithContext(ctx, handler)` 建立，
@@ -55,7 +55,7 @@ export function runWithContext(ctx, handler) {
 export function getCurrentContext() {
     const ctx = storage.getStore();
     if (ctx === undefined) {
-        throw new Error('当前不在 HTTP 请求上下文中：HttpReq / JsonRes 只能在请求处理链内使用');
+        throw new Error('当前不在 HTTP 请求上下文中：HttpReq / HttpRes 只能在请求处理链内使用');
     }
     return ctx;
 }

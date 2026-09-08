@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import { Middleware } from '#YukiLib/httpServer/middleware';
-import { JsonRes } from '#YukiLib/httpServer/jsonRes';
+import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
 import { compose } from '#YukiLib/httpServer/onion';
 
@@ -102,7 +102,7 @@ describe('Middleware.accessLog', () => {
         await runIn(ctx, () => compose([
             Middleware.accessLog(),
             async () => {
-                JsonRes.jsonRes({ ok: true }, 201);
+                HttpRes.jsonRes({ ok: true }, 201);
             },
         ])(ctx));
 

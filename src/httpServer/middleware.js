@@ -1,4 +1,4 @@
-import { JsonRes } from './jsonRes.js';
+import { HttpRes } from './httpRes.js';
 import { ServerLogger } from './serverLogger.js';
 
 /**
@@ -57,7 +57,7 @@ export class Middleware {
                 ctx.res.setHeader('Access-Control-Allow-Methods', methods);
                 ctx.res.setHeader('Access-Control-Allow-Headers', headers);
                 ctx.res.setHeader('Access-Control-Max-Age', String(maxAge));
-                JsonRes.fastResEmpty(204);
+                HttpRes.fastResEmpty(204);
                 return;
             }
 

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { AppError } from '#YukiLib/httpServer/appError';
 import { HttpReq } from '#YukiLib/httpServer/httpReq';
 import { HttpServer } from '#YukiLib/httpServer/server';
-import { JsonRes } from '#YukiLib/httpServer/jsonRes';
+import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Logger } from '#YukiLib/logger';
 import { Router } from '#YukiLib/httpServer/router';
 
@@ -258,10 +258,10 @@ describe('HttpServer：HTTP 语义', () => {
         assert.equal(await res.text(), '');
     });
 
-    it('JsonRes.fastResRedirect：307 + Location，无响应体', async () => {
+    it('HttpRes.fastResRedirect：307 + Location，无响应体', async () => {
         const base = await startServer((router) => {
             router.get('/go', () => {
-                JsonRes.fastResRedirect('/target', 303);
+                HttpRes.fastResRedirect('/target', 303);
             });
         });
         const res = await fetch(`${base}/go`, { redirect: 'manual' });
