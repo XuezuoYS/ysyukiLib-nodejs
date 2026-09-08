@@ -7,6 +7,7 @@ import { runWithContext } from '#YukiLib/httpServer/context';
  *
  * @typedef {object} ResStub
  * @property {number} statusCode 已设置的状态码
+ * @property {string|undefined} statusMessage 状态描述（响应状态日志取用）
  * @property {Record<string, any>} headers 按写出顺序记录的响应头
  * @property {string[]} cookieLines 追加的 Set-Cookie 行
  * @property {boolean} ended 是否已结束响应
@@ -23,13 +24,17 @@ import { runWithContext } from '#YukiLib/httpServer/context';
  */
 
 /**
- * 构造响应替身（统一出口只用到 statusCode / setHeader / appendHeader / end）
+ * 构造响应替身（统一出口只用到 statusCode / statusMessage / setHeader / appendHeader / end）
  *
+ * @param {object} [options] 选项
+ * @param {string} [options.statusMessage] 状态描述（默认 undefined，按标准 reason phrase 取）
  * @returns {ResStub} 替身
  */
-export function makeResStub() {
+export function makeResStub(options = {}) {
+    const { statusMessage = undefined } = options;
     const stub = {
         statusCode: 200,
+        statusMessage,
         /** @type {Record<string, any>} */
         headers: {},
         /** @type {string[]} */
@@ -107,13 +112,15 @@ export function makeResStub() {
  * @param {object} [options] 选项
  * @param {Record<string, any>} [options.headers] 请求头（键小写）
  * @param {string} [options.remoteAddress] socket 远端地址
+ * @param {string} [options.url] 原始请求目标（req.url，含查询串与 hash）
  * @returns {import('node:http').IncomingMessage} 请求替身
  */
 export function makeReqStub(options = {}) {
-    const { headers = {}, remoteAddress = '127.0.0.1' } = options;
+    const { headers = {}, remoteAddress = '127.0.0.1', url = '/' } = options;
     return /** @type {import('node:http').IncomingMessage} */ (/** @type {unknown} */ ({
         headers,
         socket: { remoteAddress },
+        url,
     }));
 }
 
@@ -130,7 +137,9 @@ export function makeReqStub(options = {}) {
  * @param {string} [options.rawBody] 请求体原文
  * @param {Record<string, any>} [options.headers] 请求头
  * @param {string} [options.requestId] 请求标识
+ * @param {string} [options.url] 原始请求目标（req.url，含查询串与 hash）
  * @param {ResStub} [options.res] 响应替身
+ * @param {import('#YukiLib/httpServer/serverLogger').ServerLoggerRequestLog} [options.logger] 请求级日志替身
  * @returns {import('#YukiLib/httpServer/context').HttpContext} 请求上下文
  */
 export function makeCtx(options = {}) {
@@ -144,10 +153,12 @@ export function makeCtx(options = {}) {
         rawBody = '',
         headers = {},
         requestId = 'req-test-1',
+        url = '/',
         res = makeResStub(),
+        logger = { info() {}, warn() {}, error() {}, access() {}, response() {} },
     } = options;
     return /** @type {import('#YukiLib/httpServer/context').HttpContext} */ (/** @type {unknown} */ ({
-        req: makeReqStub({ headers }),
+        req: makeReqStub({ headers, url }),
         res,
         method,
         path,
@@ -158,7 +169,7 @@ export function makeCtx(options = {}) {
         rawBody,
         requestId,
         state: {},
-        logger: { info() {}, warn() {}, error() {}, access() {} },
+        logger,
     }));
 }
 

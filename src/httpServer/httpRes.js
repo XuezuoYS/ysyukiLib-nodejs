@@ -14,6 +14,10 @@ import { getCurrentContext } from './context.js';
  *
  * 响应修饰（header / cookie / status）必须在写出响应之前调用。
  *
+ * 每次写出后按状态码记一行响应状态日志（1/2/3 → INFO、4/5 → WARN，其它前缀不记），
+ * 由 `ServerLogger.response` 决定等级与文本格式；是否真正记录随所属 HttpServer
+ * 实例的日志等级阈值（生产默认 warn：只留 4/5）。
+ *
  * 常用函数：
  * - jsonRes(data, httpCode, headers)：统一 JSON 出口
  * - fastResEmpty(httpCode)：无响应体（默认 200）
@@ -297,15 +301,20 @@ export class HttpRes {
     /**
      * 统一写出（内部）
      *
+     * 写出完成后按状态码记一行响应状态日志（1/2/3 → INFO、4/5 → WARN，其它前缀不记）：
+     * 本方法是全项目响应的唯一出口，凡经此处写出的响应（含 404/405/AppError/500 兜底）
+     * 都会记录；写出本身失败时不记——那时实际返回客户端的是入口兜底出口写出的状态码。
+     *
      * @param {import('node:http').ServerResponse} res 响应对象
      * @param {any} data 响应数据；显式 null 为无体形态
      * @param {number|undefined} httpCode HTTP 状态码；undefined 表示沿用当前状态码
      * @param {Record<string, string>|null} extraHeaders 附加响应头（先于 Content-Type 设置）
      */
     static #write(res, data, httpCode, extraHeaders) {
+        const ctx = getCurrentContext();
         // 标记"本次请求已写出响应"：入口据此识别主动短路的中间件（如 CORS 预检），
         // 不能依赖 res.headersSent / writableEnded——res.end() 后同一次同步执行内二者可能仍为 false。
-        getCurrentContext().responded = true;
+        ctx.responded = true;
         res.statusCode = httpCode ?? res.statusCode ?? 200;
         if (extraHeaders !== null) {
             for (const [name, value] of Object.entries(extraHeaders)) {
@@ -316,24 +325,27 @@ export class HttpRes {
         if (data === null) {
             // 无体形态：不声明 Content-Type: application/json，也不写出任何字节
             res.end();
-            return;
+        } else {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            // 4 空格缩进即 JSON_PRETTY_PRINT；斜杠与非 ASCII 不转义是 stringify 默认（两 UNESCAPED 标志）
+            // data 为 undefined（省略入参的空体契约形态）/ 函数 / symbol 时 stringify 返回 undefined
+            // 而不是字符串：GET 走 `res.end(undefined)`，即"设 Content-Type、写出空体"，保持不变。
+            const text = /** @type {string|undefined} */ (JSON.stringify(data, null, 4));
+            // HEAD 语义：头部应与 GET 一致（RFC 9110），只是没有 body。
+            // 必须显式写 Content-Length——node 对 HEAD 请求会吞掉 res.end(text) 的长度并丢弃 body，
+            // 不显式声明则客户端拿不到实体长度（无法预知大小、无法做下载进度）。
+            if (ctx.method === 'HEAD') {
+                // 空体形态（text 为 undefined）的实体长度为 0，与 GET 的 Content-Length: 0 对齐；
+                // 此处不得把 undefined 直接交给 byteLength——会抛 ERR_INVALID_ARG_TYPE 并转成 500。
+                res.setHeader('Content-Length', String(Buffer.byteLength(text ?? '', 'utf8')));
+                res.end();
+            } else {
+                res.end(text);
+            }
         }
 
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        // 4 空格缩进即 JSON_PRETTY_PRINT；斜杠与非 ASCII 不转义是 stringify 默认（两 UNESCAPED 标志）
-        // data 为 undefined（省略入参的空体契约形态）/ 函数 / symbol 时 stringify 返回 undefined
-        // 而不是字符串：GET 走 `res.end(undefined)`，即"设 Content-Type、写出空体"，保持不变。
-        const text = /** @type {string|undefined} */ (JSON.stringify(data, null, 4));
-        // HEAD 语义：头部应与 GET 一致（RFC 9110），只是没有 body。
-        // 必须显式写 Content-Length——node 对 HEAD 请求会吞掉 res.end(text) 的长度并丢弃 body，
-        // 不显式声明则客户端拿不到实体长度（无法预知大小、无法做下载进度）。
-        if (getCurrentContext().method === 'HEAD') {
-            // 空体形态（text 为 undefined）的实体长度为 0，与 GET 的 Content-Length: 0 对齐；
-            // 此处不得把 undefined 直接交给 byteLength——会抛 ERR_INVALID_ARG_TYPE 并转成 500。
-            res.setHeader('Content-Length', String(Buffer.byteLength(text ?? '', 'utf8')));
-            res.end();
-            return;
-        }
-        res.end(text);
+        // 状态码日志是旁路通道：自定义 ctx 的 logger 未实现 response 时静默跳过，
+        // 不得让日志把已经写出的响应变成异常（那会被兜底出口判定为"响应已开始后异常"并 destroy）
+        ctx.logger.response?.(res.statusCode);
     }
 }

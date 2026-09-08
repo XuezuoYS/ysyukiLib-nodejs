@@ -852,6 +852,139 @@ describe('HttpServer：全局中间件先于路由决策（方案 A）', () => {
     });
 });
 
+describe('HttpServer：响应状态码日志（写出门面唯一出口）', () => {
+    it('1/2/3 → INFO：文本为「客户端IP 请求方式 响应代码 原始URL status描述」', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-status-info-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/ok', () => ({ ok: true }));
+                router.get('/go', () => {
+                    HttpRes.fastResRedirect('/target', 303);
+                });
+            }, { logLevel: 'info' });
+
+            const entries = await captureStdoutAsync(async () => {
+                const ok = await fetch(`${base}/ok?x=1`);
+                assert.equal(ok.status, 200);
+                await ok.text();
+                const go = await fetch(`${base}/go?y=2`, { redirect: 'manual' });
+                assert.equal(go.status, 303);
+                await go.text();
+            });
+
+            const statuses = entries.filter((entry) => entry.fields.status !== undefined);
+            assert.deepEqual(statuses.map((entry) => entry.level), ['INFO', 'INFO']);
+            assert.deepEqual(statuses.map((entry) => entry.fields.status), [200, 303]);
+            // 原始 URL 含查询串，不做路径归一化；status 描述取标准 reason phrase
+            assert.equal(statuses[0].message, '127.0.0.1 GET 200 /ok?x=1 OK');
+            assert.equal(statuses[1].message, '127.0.0.1 GET 303 /go?y=2 See Other');
+            assert.equal(statuses[0].fields.service, SERVICE_NAME);
+            assert.equal(statuses[0].fields.path, '/ok');
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('4/5 → WARN：业务直接写出的 4xx 与兜底 401/404 都记（不排除任何路径）', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-status-warn-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/bad', () => {
+                    HttpRes.jsonRes({ status: '参数错误' }, 400);
+                });
+                router.get('/boom', () => {
+                    throw new AppError('密钥错误', 401);
+                });
+            }, { logLevel: 'info' });
+
+            const entries = await captureStdoutAsync(async () => {
+                const bad = await fetch(`${base}/bad`);
+                assert.equal(bad.status, 400);
+                await bad.text();
+                const boom = await fetch(`${base}/boom`);
+                assert.equal(boom.status, 401);
+                await boom.text();
+                const miss = await fetch(`${base}/nope`);
+                assert.equal(miss.status, 404);
+                await miss.text();
+            });
+
+            const statuses = entries.filter((entry) => entry.fields.status !== undefined);
+            assert.deepEqual(statuses.map((entry) => entry.level), ['WARN', 'WARN', 'WARN']);
+            assert.deepEqual(statuses.map((entry) => entry.fields.status), [400, 401, 404]);
+            assert.equal(statuses[0].message, '127.0.0.1 GET 400 /bad Bad Request');
+            assert.equal(statuses[1].message, '127.0.0.1 GET 401 /boom Unauthorized');
+            assert.equal(statuses[2].message, '127.0.0.1 GET 404 /nope Not Found');
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('等级阈值：warn 级下 2xx 状态日志丢弃、4xx 保留', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-status-level-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/ok', () => ({ ok: true }));
+                router.get('/bad', () => {
+                    HttpRes.jsonRes({ status: 'x' }, 422);
+                });
+            }, { logLevel: 'warn' });
+
+            const entries = await captureStdoutAsync(async () => {
+                await (await fetch(`${base}/ok`)).text();
+                await (await fetch(`${base}/bad`)).text();
+            });
+
+            const statuses = entries.filter((entry) => entry.fields.status !== undefined);
+            assert.deepEqual(statuses.map((entry) => entry.fields.status), [422]);
+            assert.equal(statuses[0].level, 'WARN');
+            assert.equal(statuses[0].message, '127.0.0.1 GET 422 /bad Unprocessable Entity');
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('未捕获异常：500 兜底保留原 ERROR 日志，并追加一条状态 WARN', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-status-crash-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/crash', () => {
+                    throw new Error('boom');
+                });
+            }, { logLevel: 'info' });
+
+            const entries = await captureStdoutAsync(async () => {
+                const res = await fetch(`${base}/crash`);
+                assert.equal(res.status, 500);
+                await res.text();
+            });
+
+            const errorEntry = entries.find((entry) => entry.level === 'ERROR');
+            assert.ok(errorEntry !== undefined);
+            assert.equal(errorEntry.message, '服务器内部错误');
+
+            const statusEntry = entries.find((entry) => entry.fields.status === 500);
+            assert.ok(statusEntry !== undefined);
+            assert.equal(statusEntry.level, 'WARN');
+            assert.equal(statusEntry.message, '127.0.0.1 GET 500 /crash Internal Server Error');
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+});
+
 describe('HttpServer：优雅关闭（进程级共享信号注册）', () => {
     /** 基线监听器数量（本文件其它用例均为 gracefulShutdown: false，不注册信号） */
     const baseline = {

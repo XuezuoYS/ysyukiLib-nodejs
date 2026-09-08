@@ -43,7 +43,7 @@ src/
 | `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
 | `ysyuki-lib-on-nodejs/httpServer/httpRes` | `HttpRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
-| `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志（实例化：服务名与等级随实例，`new ServerLogger({ serviceName, level })`） |
+| `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志（实例化：服务名与等级随实例，`new ServerLogger({ serviceName, level })`）；`response` 按状态码分级记响应状态日志 |
 | `ysyuki-lib-on-nodejs/httpServer/router` | `Router` / `encodeUrlParam` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由、注册期正则护栏、块外字面量转义）；`encodeUrlParam` 为 URL 参数编码 |
 | `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId）；`cors` 默认 `origin: '*'`，`credentials: true` 须显式指定非 `'*'` 的 origin |
 | `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
@@ -319,6 +319,18 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     分支内，宿主关闭补空后同样的短路反而**完全静默**（响应永不写出、客户端挂到超时也无一行日志）；
     现告警与补空开关解耦，文案按是否补空分别为"已补空 200"与"emptyResponse 已关闭，未补空响应"。
     响应契约未变：`emptyResponse` 默认仍为 `true`，处理器无输出仍补空 200。
+
+20. **响应状态码日志**（本次）：响应写出门面 `HttpRes`（全项目唯一出口）在写出后按状态码
+    **首字符**记一行日志：`1` / `2` / `3` → INFO，`4` / `5` → WARN，其余前缀（6xx–9xx 等
+    非标准码）不记。按字符串首字符判定而非数值区间，保留 4 位及以上自定义码（如 4999）
+    按 4xx 处理的可能。文本格式为 `客户端IP 请求方式 响应代码 原始URL status描述`：
+    请求方式归一为 `GET` / `POST` / `OTHER`；原始 URL 取 `req.url` 原文（含查询串与 hash，
+    不做路径归一化）；status 描述优先取响应自带的 `statusMessage`，其次标准 reason phrase，
+    无对应描述时输出 `No status message`。**凡经过该出口的响应都记**（含 404 / 405 /
+    AppError / 500 兜底），不排除任何路径——500 兜底因此同时保留原有的 ERROR 日志与一条
+    状态 WARN；写出本身失败（如非法状态码）时不记，此时实际返回客户端的是入口兜底出口
+    写出的状态码。是否真正记录随所属 `HttpServer` 实例的日志等级阈值（生产默认 warn：
+    1/2/3 丢弃、4/5 保留；开发 info 则全记）。此前 4xx/5xx 除 500 的 ERROR 日志外完全静默。
 
 ## 从旧 API 迁移（宿主改造用）
 

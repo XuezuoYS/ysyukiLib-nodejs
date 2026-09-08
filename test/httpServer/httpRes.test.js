@@ -295,3 +295,71 @@ describe('HttpRes 响应修饰', () => {
         );
     });
 });
+
+describe('HttpRes 状态码日志（唯一出口）', () => {
+    /**
+     * 记录 response() 调用的请求级日志替身
+     *
+     * @returns {{calls: number[], logger: any}} 调用记录与日志替身
+     */
+    function spyLogger() {
+        /** @type {number[]} */
+        const calls = [];
+        return {
+            calls,
+            logger: {
+                info() {},
+                warn() {},
+                error() {},
+                access() {},
+                /**
+                 * @param {number} statusCode 响应状态码
+                 */
+                response(statusCode) {
+                    calls.push(statusCode);
+                },
+            },
+        };
+    }
+
+    it('jsonRes 显式状态码：写出后按最终状态码记一次', () => {
+        const { calls, logger } = spyLogger();
+        writeWith(() => HttpRes.jsonRes({ a: 1 }, 404), { logger });
+        assert.deepEqual(calls, [404]);
+    });
+
+    it('省略状态码：沿用 status() 已设的值，不打回 200', () => {
+        const { calls, logger } = spyLogger();
+        writeWith(() => {
+            HttpRes.status(201);
+            HttpRes.jsonRes({ a: 1 });
+        }, { logger });
+        assert.deepEqual(calls, [201]);
+    });
+
+    it('无体 / 重定向 / 空响应形态各记一次', () => {
+        const { calls, logger } = spyLogger();
+        writeWith(() => HttpRes.fastResEmpty(204), { logger });
+        writeWith(() => HttpRes.fastResRedirect('/login', 307), { logger });
+        writeWith(() => HttpRes.jsonRes(null, 500), { logger });
+        assert.deepEqual(calls, [204, 307, 500]);
+    });
+
+    it('HEAD 与空体形态同样记一次', () => {
+        const { calls, logger } = spyLogger();
+        writeWith(() => HttpRes.jsonRes(undefined), { logger, method: 'HEAD' });
+        assert.deepEqual(calls, [200]);
+    });
+
+    it('写出本身失败时不记（实际返回码由入口兜底出口写出并记录）', () => {
+        const { calls, logger } = spyLogger();
+        const res = makeResStub();
+        res.setHeader = () => {
+            throw new Error('boom');
+        };
+        runIn(makeCtx({ res, logger }), () => {
+            assert.throws(() => HttpRes.fastResRedirect('https://example.test/x'), /boom/);
+        });
+        assert.deepEqual(calls, []);
+    });
+});

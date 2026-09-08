@@ -9,7 +9,7 @@ import { Logger } from '#YukiLib/logger';
 import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
 
 import { captureStdout } from '../loggerFixture.js';
-import { makeCtx } from './contextFixture.js';
+import { makeCtx, makeResStub } from './contextFixture.js';
 
 /**
  * ServerLogger：实例化日志（服务名与记录等级随实例，配置互相隔离）
@@ -135,5 +135,98 @@ describe('ServerLogger', () => {
         assert.equal(entries[0].fields.err.message, 'boom');
         assert.ok(entries[0].fields.err.stack.includes('Error: boom'));
         assert.equal(entries[0].fields.path, '/x');
+    });
+
+    it('response：1/2/3 记 INFO、4/5 记 WARN，其它前缀不记', () => {
+        const log = new ServerLogger({ serviceName: 'svc', level: 'info' });
+        const ctx = makeCtx({ method: 'GET', url: '/api/v1/health?a=1#frag' });
+        const entries = captureStdout(() => {
+            log.response(ctx, 200);
+            log.response(ctx, 301);
+            log.response(ctx, 404);
+            log.response(ctx, 503);
+            log.response(ctx, 600);
+            log.response(ctx, 999);
+        });
+        assert.deepEqual(entries.map((entry) => entry.level), ['INFO', 'INFO', 'WARN', 'WARN']);
+        assert.deepEqual(entries.map((entry) => entry.fields.status), [200, 301, 404, 503]);
+    });
+
+    it('response：文本格式为「客户端IP 请求方式 响应代码 原始URL status描述」', () => {
+        const log = new ServerLogger({ serviceName: 'svc', level: 'info' });
+        const ctx = makeCtx({
+            method: 'PUT',
+            path: '/api/v1/orders',
+            url: '/api/v1/orders?page=2#list',
+            requestId: 'rid-3',
+            headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' },
+        });
+        const entries = captureStdout(() => log.response(ctx, 404));
+        // 请求方式归一为 OTHER；URL 取 req.url 原文（含查询串与 hash）
+        assert.equal(entries[0].message, '203.0.113.7 OTHER 404 /api/v1/orders?page=2#list Not Found');
+        assert.deepEqual(entries[0].fields, {
+            service: 'svc', requestId: 'rid-3', method: 'PUT', path: '/api/v1/orders', status: 404,
+        });
+    });
+
+    it('response：GET / POST 原样，其余方法归一为 OTHER；无代理头回退 socket 地址', () => {
+        const log = new ServerLogger({ level: 'info' });
+        const entries = captureStdout(() => {
+            log.response(makeCtx({ method: 'GET', url: '/a' }), 200);
+            log.response(makeCtx({ method: 'POST', url: '/b' }), 201);
+            log.response(makeCtx({ method: 'DELETE', url: '/c' }), 204);
+        });
+        assert.deepEqual(entries.map((entry) => entry.message), [
+            '127.0.0.1 GET 200 /a OK',
+            '127.0.0.1 POST 201 /b Created',
+            '127.0.0.1 OTHER 204 /c No Content',
+        ]);
+    });
+
+    it('response：自定义码按首字符判级，无描述时输出 No status message', () => {
+        const log = new ServerLogger({ level: 'info' });
+        const ctx = makeCtx({ method: 'GET', url: '/x' });
+        const entries = captureStdout(() => {
+            log.response(ctx, 499);
+            log.response(ctx, 4999);
+        });
+        // 4999 这类 4 位自定义码同样按 4 开头判级（不写 400-599 数值区间）
+        assert.deepEqual(entries.map((entry) => entry.level), ['WARN', 'WARN']);
+        assert.deepEqual(entries.map((entry) => entry.message), [
+            '127.0.0.1 GET 499 /x No status message',
+            '127.0.0.1 GET 4999 /x No status message',
+        ]);
+    });
+
+    it('response：响应自带 statusMessage 优先于标准描述', () => {
+        const log = new ServerLogger({ level: 'info' });
+        const ctx = makeCtx({
+            method: 'POST',
+            url: '/x',
+            res: makeResStub({ statusMessage: 'Rate Limited' }),
+        });
+        const entries = captureStdout(() => log.response(ctx, 429));
+        assert.equal(entries[0].message, '127.0.0.1 POST 429 /x Rate Limited');
+    });
+
+    it('response：warn 阈值下 1/2/3 丢弃、4/5 保留', () => {
+        const log = new ServerLogger({ level: 'warn' });
+        const ctx = makeCtx({ method: 'GET', url: '/' });
+        const entries = captureStdout(() => {
+            log.response(ctx, 200);
+            log.response(ctx, 404);
+        });
+        assert.deepEqual(entries.map((entry) => entry.level), ['WARN']);
+    });
+
+    it('request(ctx).response：请求级日志自动附带 service / requestId / method / path', () => {
+        const log = new ServerLogger({ serviceName: 'svc', level: 'info' });
+        const ctx = makeCtx({ method: 'GET', url: '/x?y=1', path: '/x', requestId: 'rid-4' });
+        const entries = captureStdout(() => log.request(ctx).response(200));
+        assert.equal(entries[0].level, 'INFO');
+        assert.equal(entries[0].message, '127.0.0.1 GET 200 /x?y=1 OK');
+        assert.deepEqual(entries[0].fields, {
+            service: 'svc', requestId: 'rid-4', method: 'GET', path: '/x', status: 200,
+        });
     });
 });

@@ -5,6 +5,15 @@
  */
 
 /**
+ * 本库日志行前缀：ISO 本地时间戳 + 制表符 + 大写定宽等级 + 制表符
+ *
+ * 捕获期间只吞掉这种行，其余 stdout 输出（如 `node --test` 运行器自己的用例结果）
+ * 原样转发——整段拦截会把运行器的输出一并吞掉，导致丢用例结果、suite 错挂（假 ✖）。
+ * @type {RegExp}
+ */
+const LOG_LINE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\t[A-Z]{3,5} *\t/;
+
+/**
  * 解析一行结构化日志：`ISO时间\tLEVEL(定宽)\t消息[\t附加字段JSON]`
  *
  * 非日志行（无制表符分隔，如并发写入 stdout 的其它输出）返回 null，由调用方过滤，
@@ -57,10 +66,7 @@ export function captureStdout(fn) {
     /** @type {string[]} */
     const lines = [];
     const original = process.stdout.write;
-    process.stdout.write = (chunk) => {
-        lines.push(String(chunk));
-        return true;
-    };
+    process.stdout.write = makeCapture(lines, original);
     try {
         fn();
     } finally {
@@ -81,14 +87,31 @@ export async function captureStdoutAsync(fn) {
     /** @type {string[]} */
     const lines = [];
     const original = process.stdout.write;
-    process.stdout.write = (chunk) => {
-        lines.push(String(chunk));
-        return true;
-    };
+    process.stdout.write = makeCapture(lines, original);
     try {
         await fn();
     } finally {
         process.stdout.write = original;
     }
     return parseLogLines(lines.join(''));
+}
+
+/**
+ * 构造 stdout 写替身：本库日志行收集到 lines，其余原样转发
+ *
+ * @param {string[]} lines 日志行收集数组
+ * @param {typeof process.stdout.write} original 原始 write
+ * @returns {typeof process.stdout.write} 替身 write
+ */
+function makeCapture(lines, original) {
+    /** @type {any} */
+    const patched = (chunk, ...args) => {
+        const text = String(chunk);
+        if (LOG_LINE_PATTERN.test(text)) {
+            lines.push(text);
+            return true;
+        }
+        return original.call(process.stdout, chunk, ...args);
+    };
+    return patched;
 }
