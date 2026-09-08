@@ -1,0 +1,5 @@
+.env
+dev.config.json
+log/
+node_modules/
+.pnpm-store/

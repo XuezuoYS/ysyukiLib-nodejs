@@ -1,0 +1,15 @@
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "lib": ["esnext"],
+        "checkJs": true,
+        "noEmit": true,
+        "maxNodeModuleJsDepth": 0,
+        "strict": false,
+        "types": ["node"]
+    },
+    "include": ["src/**/*", "test/**/*"],
+    "exclude": ["node_modules"]
+}
