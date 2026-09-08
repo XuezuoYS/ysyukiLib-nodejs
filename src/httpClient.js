@@ -23,7 +23,7 @@ import { Config } from './config.js';
  *
  * 行为约定（既定契约）：
  * - `requireHttp(method, url, headers, data)` 返回 `{ status, headers, body, rawInfo }`；
- * - 无协议前缀的 URL 自动补 `http://`（safeUrl）；
+ * - 无协议前缀的 URL 自动补 `http://`（safeUrl）；url 入参支持 `URL` 对象等非字符串（内部归一化）；
  * - 3xx 自动重定向（上限 10 次，自动 Referer；协议按每一跳的 URL 重新判定，可跨 http/https；
  *   POST 遇 301/302/303 转 GET 并丢弃请求体，307/308 保持方法）；
  * - 总超时 60s、连接超时 20s；
@@ -307,11 +307,14 @@ export class HttpClient {
      *
      * 该函数用于确保URL具有正确的协议前缀，如果URL没有http或https协议，则默认添加http协议前缀
      *
-     * @param {string} url 需要处理的URL字符串
+     * 入参按 `String()` 归一化，`URL` 对象、数字等非字符串入参不会抛 `url.trim is not a function`；
+     * 空串/null 补前缀后成为 `http://`，交由后续 `new URL()` 报出明确的 URL 解析错误。
+     *
+     * @param {string|URL|any} url 需要处理的URL（URL 对象等会先转字符串）
      * @returns {string} 处理后的安全URL
      */
     safeUrl(url) {
-        let safe = url.trim();
+        let safe = String(url ?? '').trim();
         if (!/^https?:\/\//i.test(safe)) {
             safe = 'http://' + safe;
         }
@@ -324,11 +327,11 @@ export class HttpClient {
      * 通过正则匹配URL是否以https://开头来判断是否为SSL加密连接，
      * 并把判断结果写回实例状态（http 会把 ssl 复位为 false，不保留上一次的 https 状态）
      *
-     * @param {string} url 待检查URL地址
+     * @param {string|URL|any} url 待检查URL（非字符串入参会先转字符串）
      * @returns {boolean} 返回true表示URL使用SSL加密，false表示未使用SSL加密
      */
     isSSL(url) {
-        const isSsl = /^https:/i.test(url);
+        const isSsl = /^https:/i.test(String(url ?? ''));
         this.ssl = isSsl;
         return isSsl;
     }
@@ -358,7 +361,7 @@ export class HttpClient {
      * 发起HTTP请求（含自动重定向）
      *
      * @param {string} method 请求方法，如GET、POST、PUT、DELETE等
-     * @param {string} url 请求URL
+     * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {Record<string, any>|Array<string>|null} [headers] 添加请求头，为 null 时使用实例累积的请求头
      * @default headers = null
      * @param {string|Buffer|null} [data] 请求数据，字符串/Buffer 原样发送；GET 方法不发送请求体
@@ -449,7 +452,7 @@ export class HttpClient {
      *
      * 该函数用于发送GET请求，参数为URL和请求头，返回请求结果
      *
-     * @param {string} url 请求URL
+     * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {Record<string, any>|Array<string>|null} [headers] 请求头，为 null 时使用实例累积的请求头
      * @default headers = null
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果
@@ -463,7 +466,7 @@ export class HttpClient {
      *
      * 该函数用于发送POST请求，参数为URL、数据、数据类型和请求头，返回请求结果
      *
-     * @param {string} url 请求URL
+     * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {any} [data] 请求数据，对象/数组按 dataType 自动转换，字符串原样发送
      * @default data = []
      * @param {string} [dataType] 数据类型，可选 "json" 或 "form"
@@ -481,7 +484,7 @@ export class HttpClient {
      *
      * 该函数用于发送PUT请求，参数为URL、数据、数据类型和请求头，返回请求结果
      *
-     * @param {string} url 请求URL
+     * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {any} [data] 请求数据，对象/数组按 dataType 自动转换，字符串原样发送
      * @default data = []
      * @param {string} [dataType] 数据类型，可选 "json" 或 "form"
@@ -499,7 +502,7 @@ export class HttpClient {
      *
      * 该函数用于发送DELETE请求，参数为URL和请求头，返回请求结果
      *
-     * @param {string} url 请求URL
+     * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {Record<string, any>|Array<string>|null} [headers] 请求头，为 null 时使用实例累积的请求头
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果
      */
@@ -511,7 +514,7 @@ export class HttpClient {
      * 按 dataType 组织请求体并发起请求
      *
      * @param {string} method HTTP 方法
-     * @param {string} url 请求URL
+     * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {any} data 请求数据
      * @param {string} dataType "json" 或 "form"
      * @param {Record<string, any>|Array<string>|null} headers 请求头

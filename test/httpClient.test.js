@@ -118,6 +118,34 @@ describe('HttpClient：基础请求与回显', () => {
         assert.equal(res.status, 200);
     });
 
+    it('safeUrl：非字符串入参归一化，不再抛 url.trim is not a function', async () => {
+        const client = new HttpClient();
+
+        // URL 对象（Node 里最常见的"想直接传 URL"写法）
+        assert.equal(client.safeUrl(new URL(`${baseUrl()}/echo`)), `${baseUrl()}/echo`);
+        assert.equal(client.safeUrl(new URL('https://example.test/a')), 'https://example.test/a');
+        // 其它非字符串
+        assert.equal(client.safeUrl(42), 'http://42');
+        assert.equal(client.safeUrl(null), 'http://');
+        assert.equal(client.safeUrl(undefined), 'http://');
+        assert.equal(client.safeUrl('  '), 'http://');
+        // 字符串行为不变
+        assert.equal(client.safeUrl('  example.test/x  '), 'http://example.test/x');
+        assert.equal(client.safeUrl('HTTPS://example.test/x'), 'HTTPS://example.test/x');
+
+        // 端到端：直接传 URL 对象也能发请求
+        const res = await client.get(new URL(`${baseUrl()}/echo`));
+        assert.equal(res.status, 200);
+        assert.equal(JSON.parse(res.body).url, '/echo');
+    });
+
+    it('isSSL：非字符串入参归一化', () => {
+        const client = new HttpClient();
+        assert.equal(client.isSSL(new URL('https://example.test/x')), true);
+        assert.equal(client.isSSL(new URL('http://example.test/x')), false);
+        assert.equal(client.isSSL(null), false);
+    });
+
     it('自定义请求头与数字键原始头', async () => {
         const client = new HttpClient();
         const res = await client.get(`${baseUrl()}/echo`, { 'x-custom': 'v1' });
