@@ -331,6 +331,10 @@ pnpm check    # tsc 静态类型检查，exit 0
 pnpm test     # node:test 全量
 ```
 
+发布前守门：`prepublishOnly` 会在 `npm publish` 时自动跑 `npm run check && npm run test`
+（`npm publish --dry-run` 同样触发），任一失败即中止发布。它**不**在 `npm install`
+或 `npm pack` 时运行，不影响日常开发；可用 `npm publish --ignore-scripts` 绕过（防手滑，不防恶意）。
+
 测试脚本是 `node --test "test/*.test.js" "test/**/*.test.js"`，两个模式都**必须保留**：
 
 - `test/**/*.test.js` 在 **bash 默认（`globstar off`）下 `**` 等同于 `*`**，展开后只覆盖

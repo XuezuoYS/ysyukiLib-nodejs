@@ -42,7 +42,8 @@
   ],
   "scripts": {
     "test": "node --test \"test/*.test.js\" \"test/**/*.test.js\"",
-    "check": "tsc -p jsconfig.json"
+    "check": "tsc -p jsconfig.json",
+    "prepublishOnly": "npm run check && npm run test"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
