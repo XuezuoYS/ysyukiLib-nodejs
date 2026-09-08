@@ -10,7 +10,10 @@ import { HttpReq } from '#YukiLib/httpServer/httpReq';
 import { HttpServer, normalizePath, parseFormBody } from '#YukiLib/httpServer/server';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Logger } from '#YukiLib/logger';
+import { Middleware } from '#YukiLib/httpServer/middleware';
 import { Router } from '#YukiLib/httpServer/router';
+
+import { captureStdoutAsync } from '../loggerFixture.js';
 
 /**
  * HttpServer 集成测试（真实监听 127.0.0.1 临时端口）
@@ -485,12 +488,18 @@ describe('HttpServer：兜底分支', () => {
 describe('HttpServer：HTTP 语义', () => {
     it('HEAD：命中 GET 路由，响应头照常、响应体抑制', async () => {
         const base = await startServer((router) => {
-            router.get('/head', () => ({ ok: true }));
+            router.get('/head', () => ({ ok: true, text: '中文' }));
         });
+        const getRes = await fetch(`${base}/head`);
+        const getBody = await getRes.text();
+
         const res = await fetch(`${base}/head`, { method: 'HEAD' });
         assert.equal(res.status, 200);
         assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
         assert.equal(await res.text(), '');
+        // L5：HEAD 头部应与 GET 一致——必须带 Content-Length（按字节数，非字符数）
+        assert.equal(res.headers.get('content-length'), String(Buffer.byteLength(getBody, 'utf8')));
+        assert.equal(res.headers.get('content-length'), getRes.headers.get('content-length'));
     });
 
     it('HttpRes.fastResRedirect：307 + Location，无响应体', async () => {
@@ -538,6 +547,67 @@ describe('HttpServer：HTTP 语义', () => {
         });
         assert.deepEqual(await (await fetch(`${base}/v1/in`)).json(), { scope: 'v1' });
         assert.deepEqual(await (await fetch(`${base}/out`)).json(), { scope: null });
+    });
+
+    it('中间件忘记调用 next()：补空 200 并记 WARN（不静默）', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-mw-warn-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.use(async () => { /* 既没 next()，也没写响应 */ });
+                router.get('/x', () => ({ never: true }));
+            }, { logLevel: 'warn' });
+
+            const entries = await captureStdoutAsync(async () => {
+                const res = await fetch(`${base}/x`);
+                assert.equal(res.status, 200);
+                assert.equal(await res.text(), '');
+            });
+            const warned = entries.filter((entry) => entry.message.includes('未调用 next()'));
+            assert.equal(warned.length, 1);
+            assert.equal(warned[0].level, 'WARN');
+            assert.equal(warned[0].fields.path, '/x');
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('正常调用 next() 与主动写响应的短路中间件都不告警', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-mw-ok-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.use(async (ctx, next) => {         // 正常洋葱
+                    await next();
+                });
+                router.use(async (ctx, next) => {         // 主动短路：写响应后不调 next()
+                    if (ctx.path === '/short') {
+                        HttpRes.status(204);
+                        HttpRes.fastResEmpty();
+                        return;
+                    }
+                    await next();
+                });
+                router.get('/x', () => ({ ok: true }));
+                router.get('/short', () => ({ never: true }));
+            }, { logLevel: 'warn' });
+
+            const entries = await captureStdoutAsync(async () => {
+                const ok = await fetch(`${base}/x`);
+                assert.deepEqual(await ok.json(), { ok: true });
+
+                const shorted = await fetch(`${base}/short`);
+                assert.equal(shorted.status, 204);
+                assert.equal(await shorted.text(), '');
+            });
+            assert.deepEqual(entries.filter((entry) => entry.message.includes('未调用 next()')), []);
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
     });
 });
 

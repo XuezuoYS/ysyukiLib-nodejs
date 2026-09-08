@@ -302,6 +302,9 @@ export class HttpRes {
      * @param {Record<string, string>|null} extraHeaders 附加响应头（先于 Content-Type 设置）
      */
     static #write(res, data, httpCode, extraHeaders) {
+        // 标记"本次请求已写出响应"：入口据此识别主动短路的中间件（如 CORS 预检），
+        // 不能依赖 res.headersSent / writableEnded——res.end() 后同一次同步执行内二者可能仍为 false。
+        getCurrentContext().responded = true;
         res.statusCode = httpCode ?? res.statusCode ?? 200;
         if (extraHeaders !== null) {
             for (const [name, value] of Object.entries(extraHeaders)) {
@@ -316,12 +319,16 @@ export class HttpRes {
         }
 
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        // HEAD 语义：响应头照常写出，响应体抑制（内容长度由客户端按 GET 语义推断）
+        // 4 空格缩进即 JSON_PRETTY_PRINT；斜杠与非 ASCII 不转义是 stringify 默认（两 UNESCAPED 标志）
+        const text = JSON.stringify(data, null, 4);
+        // HEAD 语义：头部应与 GET 一致（RFC 9110），只是没有 body。
+        // 必须显式写 Content-Length——node 对 HEAD 请求会吞掉 res.end(text) 的长度并丢弃 body，
+        // 不显式声明则客户端拿不到实体长度（无法预知大小、无法做下载进度）。
         if (getCurrentContext().method === 'HEAD') {
+            res.setHeader('Content-Length', String(Buffer.byteLength(text, 'utf8')));
             res.end();
             return;
         }
-        // 4 空格缩进即 JSON_PRETTY_PRINT；斜杠与非 ASCII 不转义是 stringify 默认（两 UNESCAPED 标志）
-        res.end(JSON.stringify(data, null, 4));
+        res.end(text);
     }
 }

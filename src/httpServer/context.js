@@ -37,6 +37,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * @property {Record<string, any>} state 中间件共享状态（约定键名，避免互踩）
  * @property {import('./serverLogger.js').ServerLoggerRequestLog} logger 请求级日志
  * @property {Record<string, string>} [cookies] Cookie 惰性解析缓存（内部使用）
+ * @property {boolean} [responded] 是否已由 HttpRes 写出过响应（内部使用，供入口识别短路中间件）
  */
 
 /**

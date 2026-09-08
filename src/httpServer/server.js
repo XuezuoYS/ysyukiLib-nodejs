@@ -488,6 +488,12 @@ export class HttpServer {
                 ])(ctx);
 
                 if (this.#options.emptyResponse && !res.headersSent && !res.writableEnded) {
+                    // 走到这里说明整条链没写出任何响应：多半是某个中间件忘了调用 next()
+                    // （静默补空 200 会让前端"拿到 200 空体"、后端完全无感知，最难排查）。
+                    // 主动写出响应的短路中间件（如 CORS 预检）已在 ctx.responded 标记，不会进这里。
+                    if (ctx.responded !== true) {
+                        ctx.logger.warn('中间件未调用 next() 且未写出响应，已补空 200', { path: ctx.path });
+                    }
                     HttpRes.fastResEmpty();
                 }
             });
