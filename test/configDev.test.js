@@ -99,6 +99,38 @@ describe('Config.getConfig() 开发覆盖优先级', () => {
     });
 });
 
+describe('Config.getConfig()：dev 数据形态容错（B3）', () => {
+    it('dev.config.json 内容整体为 null：静默回退普通取值，不抛 TypeError', () => {
+        useDev(fixture('null-dev.json', 'null'));
+        assert.equal(Config.isDev(), true, '文件存在即开发环境');
+        assert.doesNotThrow(() => Config.getConfig('port'));
+        assert.equal(Config.getConfig('port'), 8000);
+        assert.equal(Config.devConfigRead(), false, '顶层非对象应视为读取失败');
+        assert.equal(Config.isDevConfigLoaded, false);
+    });
+
+    it('dev.config.json 内容整体为字符串 / 数字：同样静默回退', () => {
+        for (const content of ['"null-as-string"', '42']) {
+            useDev(fixture('scalar-dev.json', content));
+            assert.doesNotThrow(() => Config.getConfig('port'));
+            assert.equal(Config.getConfig('port'), 8000, `内容 ${content} 不应影响普通取值`);
+        }
+    });
+
+    it('devConfigData 被外部直接赋值为 null：回退普通取值，不抛 TypeError', () => {
+        useDev(fixture('has-dev-key.json', JSON.stringify({ port: 6001 })), /** @type {any} */ (null));
+        assert.doesNotThrow(() => Config.getConfig('port'));
+        assert.equal(Config.getConfig('port'), 8000);
+        assert.equal(Config.getConfig('both'), false);
+    });
+
+    it('dev 缓存为 null 时不影响 config.json 自身取值', () => {
+        useDev(fixture('has-dev-key.json', JSON.stringify({ port: 6001 })), /** @type {any} */ (null));
+        assert.equal(Config.getConfig('host'), '127.0.0.1');
+        assert.equal(Config.getConfig('port.dev'), 8001);
+    });
+});
+
 after(() => {
     Config.setRootDir(null);
     Logger.logDir = null;

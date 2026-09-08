@@ -9,12 +9,14 @@ import { Logger } from './logger.js';
  * 使用 Config.getEnv(key) 获取环境变量（系统环境 + `.env` 文件，系统环境优先）
  *
  * 使用 Config.getConfig(key) 获取 config.json 文件中的配置项；
- * 文件缺失或解析失败时 getConfig 一律返回 false，并**经 Logger.warn 记录一次**警告
+ * 文件缺失、解析失败，或解析结果不是对象（文件内容整体是 null / 数字 / 字符串等）时，
+ * getConfig 一律返回 false，并**经 Logger.warn 记录一次**警告
  * （同一宿主根只告警一次；静默失败会让人误以为"配置生效了"）。
+ * 任何情况下 getConfig 都不因配置数据形态而抛 TypeError。
  *
  * 开发环境：宿主项目根存在 `dev.config.json`（不入库）时 Config.isDev() 为 true，
  * 取值优先级：dev.config.json[name] > config.json[`${name}.dev`] > config.json[name]；
- * dev 文件缺失/解析失败时静默回退普通取值。
+ * dev 文件缺失/解析失败/内容不是对象时静默回退普通取值。
  *
  * 宿主项目根（"根目录"）解析优先级（首次调用时确定并缓存）：
  * 1. Config.setRootDir(dir) 显式指定；
@@ -54,6 +56,24 @@ const ROOT_ENV_KEY = 'YUKI_PROJECT_ROOT';
  */
 function stripBom(text) {
     return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
+/**
+ * 判断解析结果是否可按键取值
+ *
+ * `config.json` 内容整体是 `null`（或数字 / 字符串 / 布尔等 JSON 值）时，
+ * `JSON.parse` 依然**成功**并返回非对象值；此时按键取值会抛
+ * `TypeError: Cannot convert undefined or null to object`，
+ * 与"缺失 / 失败一律返回 false"的容错承诺相悖。
+ * 统一以本函数判定：不是对象即视为"配置不可用"，不抛错。
+ *
+ * 数组是对象，故顶层数组仍可按下标取值（维持既有行为，按键取不到时返回 false）。
+ *
+ * @param {any} data 解析得到的配置数据
+ * @returns {boolean} 可按键取值返回 true
+ */
+function isKeyableObject(data) {
+    return data !== null && typeof data === 'object';
 }
 
 /**
@@ -103,6 +123,10 @@ export class Config {
 
     /**
      * 配置文件集合，需运行 configRead() 获取
+     *
+     * 本库只在解析结果是对象时写入（读取失败保持 `{}`）；
+     * 外部赋成非对象时 getConfig 按"不可用"处理（返回 false，不抛错）。
+     *
      * @type {Record<string, any>}
      */
     static configData = {};
@@ -115,6 +139,9 @@ export class Config {
 
     /**
      * 开发环境配置集合，需运行 devConfigRead() 获取
+     *
+     * 同 configData：本库只在解析结果是对象时写入，非对象一律按"不可用"回退普通取值。
+     *
      * @type {Record<string, any>}
      */
     static devConfigData = {};
@@ -249,7 +276,8 @@ export class Config {
     /**
      * 读取 config.json 文件的内容并转换为对象
      *
-     * 文件缺失或解析失败时返回 false（调用方静默回退），但会经 Logger.warn 记录一次
+     * 文件缺失、解析失败，或解析结果不是对象（内容整体是 `null` / 数字 / 字符串等）时
+     * 返回 false（调用方静默回退），但会经 Logger.warn 记录一次
      * 警告：`getConfig` 此时一律返回 false，配置实际未生效，静默失败最难排查。
      * 警告按宿主根去重（setRootDir 重置），重复取值不会刷屏；只记录路径与原因，
      * 不输出文件内容（避免把密钥写进日志）。
@@ -271,13 +299,25 @@ export class Config {
             return false;
         }
 
+        /** @type {any} */
+        let parsed;
         try {
-            Config.configData = JSON.parse(stripBom(content));
+            parsed = JSON.parse(stripBom(content));
         } catch (err) {
             Config.#warnConfigUnavailable(file, err);
             return false;
         }
 
+        if (!isKeyableObject(parsed)) {
+            // JSON.parse 成功但内容不是配置对象（如整个文件就是 `null`）：
+            // 与解析失败同等处理，否则后续按键取值会抛 TypeError
+            Config.#warnConfigUnavailable(file, new TypeError(
+                `config.json 内容不是对象（实际为 ${parsed === null ? 'null' : typeof parsed}）`,
+            ));
+            return false;
+        }
+
+        Config.configData = parsed;
         Config.isConfigLoaded = true;
         return true;
     }
@@ -318,7 +358,10 @@ export class Config {
     /**
      * 读取 dev.config.json 文件的内容并转换为对象
      *
-     * @returns {boolean} 读取成功返回 true，文件缺失或解析失败返回 false（调用方静默回退普通取值）
+     * 文件缺失、解析失败或内容不是对象时返回 false（调用方静默回退普通取值）；
+     * 与 configRead 不同，此处不告警（开发配置本就是可选覆盖）。
+     *
+     * @returns {boolean} 读取成功返回 true，文件缺失、解析失败或内容不是对象返回 false（调用方静默回退普通取值）
      */
     static devConfigRead() {
         if (Config.isDevConfigLoaded) {
@@ -332,12 +375,20 @@ export class Config {
             return false;
         }
 
+        /** @type {any} */
+        let parsed;
         try {
-            Config.devConfigData = JSON.parse(stripBom(content));
+            parsed = JSON.parse(stripBom(content));
         } catch {
             return false;
         }
 
+        if (!isKeyableObject(parsed)) {
+            // 内容整体是 `null` 等非对象值：解析"成功"但不可按键取值，静默回退
+            return false;
+        }
+
+        Config.devConfigData = parsed;
         Config.isDevConfigLoaded = true;
         return true;
     }
@@ -360,16 +411,18 @@ export class Config {
      * 开发环境（dev.config.json 存在且可读）下优先取 dev 文件同名键，
      * 其次取 config.json 的 `${key}.dev` 键，最后回退 config.json 普通键。
      *
+     * 配置缓存形态异常（被赋值为 null / 非对象）时同样返回 false，不抛 TypeError。
+     *
      * @param {string} key 配置项键名
      * @returns {any|false} 获取成功返回配置项值（可为字符串/数字/布尔/对象），失败返回 false
      */
     static getConfig(key) {
         const success = Config.configRead();
-        if (!success) {
+        if (!success || !isKeyableObject(Config.configData)) {
             return false;
         }
 
-        if (Config.isDev() && Config.devConfigRead()) {
+        if (Config.isDev() && Config.devConfigRead() && isKeyableObject(Config.devConfigData)) {
             if (Object.prototype.hasOwnProperty.call(Config.devConfigData, key)) {
                 return Config.devConfigData[key];
             }

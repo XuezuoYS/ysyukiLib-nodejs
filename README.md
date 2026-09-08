@@ -192,7 +192,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 
 | 路径 | 必需 | 说明 |
 | --- | --- | --- |
-| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失或解析失败时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置） |
+| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失、解析失败或内容整体不是对象（如文件就是 `null`）时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置） |
 | `.env` | 否 | `Config.getEnv(key)` 补充来源；系统环境变量优先，文件缺失静默忽略 |
 | `dev.config.json` | 否 | **存在即开发环境**：日志全级别、`getConfig` 走 dev 覆盖链 |
 | `CA/cacert.pem` | 否 | HTTPS 自定义 CA；**公共站点无需配置**（Node 自带根 CA 且默认校验证书链），文件缺失时回退系统 CA；`ca` 为替换语义，只放需额外信任的私有 CA |
@@ -299,6 +299,14 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     现按纯文本处理：编译时对字面量段转义 `[.*+?^${}()|[\]\\]`，`group()` 前缀与块后缀
     （如 `/report.{id:int}.pdf`）一并生效。影响面：仅含占位符的模板路由（无占位符一直是字符串精确比较）；
     `@` 自定义正则与 `addMatchTypes` 片段仍按正则解析、不转义；`generate()` 输出的仍是 URL 字面量。
+
+18. **顶层非对象容错**（本次，修复）：`config.json` / `dev.config.json` 内容整体是 `null`
+    （或数字 / 字符串 / 布尔）时 `JSON.parse` **成功**并返回非对象值，此前 `Config.getConfig`
+    会抛 `TypeError: Cannot convert undefined or null to object`，且缓存会被写成 `null`、
+    `isConfigLoaded` 还会被误置为"已加载"。现与"解析失败"同等对待：不写缓存、不置已加载、
+    `getConfig` 一律返回 `false`；`config.json` 照旧记一次 WARN（原因写明"内容不是对象"），
+    dev 文件静默回退普通取值。顶层为**数组**时语义不变（数组仍是对象：按数字下标可取，
+    按键名取不到返回 `false`）。
 
 ## 从旧 API 迁移（宿主改造用）
 

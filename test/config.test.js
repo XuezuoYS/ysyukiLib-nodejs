@@ -216,3 +216,93 @@ describe('Config：路径可定位性', () => {
         assert.equal(existsSync(Config.resolveFromRoot('.env')), true);
     });
 });
+
+describe('Config：config.json 顶层内容非对象（B3）', () => {
+    /**
+     * 生成一个宿主根临时目录，其 config.json 内容为指定文本
+     *
+     * @param {string} tag 临时目录前缀
+     * @param {string} content config.json 内容（原样写入，不经 JSON.stringify）
+     * @returns {string} 宿主根绝对路径
+     */
+    function rootWithConfig(tag, content) {
+        const custom = mkdtempSync(join(tmpdir(), tag));
+        writeFileSync(join(custom, 'config.json'), content, 'utf8');
+        return custom;
+    }
+
+    it('内容整体为 null：getConfig 返回 false（兑现容错承诺，不抛 TypeError）', () => {
+        const nullDir = rootWithConfig('ysyuki-nullcfg-', 'null');
+        Config.setRootDir(nullDir);
+        try {
+            assert.doesNotThrow(() => Config.getConfig('host'));
+            assert.equal(Config.getConfig('host'), false);
+            assert.equal(Config.configRead(), false, '顶层非对象应视为读取失败');
+            assert.equal(Config.isConfigLoaded, false, '失败不得置为已加载');
+            assert.deepEqual(Config.configData, {}, '失败不得把缓存写成 null');
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(nullDir, { recursive: true, force: true });
+        }
+    });
+
+    it('内容整体为 null：按"不可用"告警一次且说明原因', () => {
+        const nullDir = rootWithConfig('ysyuki-nullwarn-', 'null');
+        Config.setRootDir(nullDir);
+        try {
+            const entries = captureStdout(() => {
+                assert.equal(Config.getConfig('host'), false);
+                assert.equal(Config.getConfig('host'), false);
+            });
+            const warned = entries.filter((entry) => entry.message.includes('读取或解析失败'));
+            assert.equal(warned.length, 1, '同一宿主根只应告警一次');
+            assert.equal(warned[0].level, 'WARN');
+            assert.equal(warned[0].fields.file, join(nullDir, 'config.json'));
+            assert.match(warned[0].fields.reason, /内容不是对象（实际为 null）/);
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(nullDir, { recursive: true, force: true });
+        }
+    });
+
+    it('内容整体为数字 / 字符串 / 布尔：同样返回 false 并告警', () => {
+        for (const content of ['123', '"a string"', 'true']) {
+            const scalarDir = rootWithConfig('ysyuki-scalarcfg-', content);
+            Config.setRootDir(scalarDir);
+            try {
+                const entries = captureStdout(() => {
+                    assert.doesNotThrow(() => Config.getConfig('host'));
+                    assert.equal(Config.getConfig('host'), false, `内容 ${content} 应取不到任何键`);
+                });
+                assert.equal(entries.filter((entry) => entry.message.includes('读取或解析失败')).length, 1);
+            } finally {
+                Config.setRootDir(dir);
+                rmSync(scalarDir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('内容整体为数组：保持既有语义（按键取不到返回 false，不抛错）', () => {
+        const arrayDir = rootWithConfig('ysyuki-arraycfg-', '[1,2]');
+        Config.setRootDir(arrayDir);
+        try {
+            assert.equal(Config.getConfig('host'), false);
+            assert.equal(Config.configRead(), true);
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(arrayDir, { recursive: true, force: true });
+        }
+    });
+
+    it('缓存被外部直接赋值为 null：取值返回 false 而非抛 TypeError', () => {
+        Config.configRead();
+        const original = Config.configData;
+        Config.configData = /** @type {any} */ (null);
+        try {
+            assert.doesNotThrow(() => Config.getConfig('host'));
+            assert.equal(Config.getConfig('host'), false);
+        } finally {
+            Config.configData = original;
+        }
+    });
+});
