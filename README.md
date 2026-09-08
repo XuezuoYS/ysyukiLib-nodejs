@@ -331,6 +331,14 @@ pnpm check    # tsc 静态类型检查，exit 0
 pnpm test     # node:test 全量
 ```
 
+测试脚本是 `node --test "test/*.test.js" "test/**/*.test.js"`，两个模式都**必须保留**：
+
+- `test/**/*.test.js` 在 **bash 默认（`globstar off`）下 `**` 等同于 `*`**，展开后只覆盖
+  `test/httpServer/`，会**静默漏掉 `test/` 顶层的 7 个测试文件**（17 → 10 个文件）；
+- 加上 `test/*.test.js` 后，无论 glob 由 Node 自己展开还是被 shell 展开，结果都一致；
+- 不要改成 `node --test`（无参数）：Node 的自动发现会把 `test/` 下的**夹具文件**
+  （`contextFixture.js` / `loggerFixture.js`）也当成测试文件执行。
+
 真实数据库/SMTP 的连通性由项目所有者在部署环境验证（本库不含这两类组件）。
 
 ## 许可证

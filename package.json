@@ -41,7 +41,7 @@
     "src"
   ],
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test \"test/*.test.js\" \"test/**/*.test.js\"",
     "check": "tsc -p jsconfig.json"
   },
   "devDependencies": {
