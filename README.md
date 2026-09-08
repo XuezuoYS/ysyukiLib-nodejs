@@ -1,7 +1,7 @@
 # ysyuki-lib-on-nodejs
 
 跨项目通用的 Node.js 基础库：**零第三方运行时依赖**（纯 Node 内置模块），
-自 `xyz.xuezuo.basic` 的 `src/yukiLib/` 抽出，并按域重组为独立源码树（见下方目录结构），供多个项目共用。
+迁移自某内部项目，并按域重组为独立源码树（见下方目录结构），供多个项目共用。
 
 目标是"在不同项目里的库体验一致"：同一个类、同一套行为约定、同一套命名与注释风格、同一套验收命令。
 
@@ -79,7 +79,7 @@ router.use(async (ctx, next) => {
     Logger.info('access', { path: ctx.path, ms: Date.now() - startedAt });
 });
 
-HttpServer.create({ router, serviceName: 'YueshiYuki Net Basic Service' })
+HttpServer.create({ router, serviceName: 'example-service' })
     .listen(8000, '127.0.0.1', () => Logger.info('服务已启动'));
 ```
 
@@ -95,7 +95,7 @@ HttpServer.create({ router, serviceName: 'YueshiYuki Net Basic Service' })
 ```json
 {
   "dependencies": {
-    "ysyuki-lib-on-nodejs": "link:../YsyukiLibOnNodejs"
+    "ysyuki-lib-on-nodejs": "link:../ysyukiLib-nodejs"
   },
   "imports": {
     "#YukiLib/*": "ysyuki-lib-on-nodejs/*"
@@ -124,7 +124,8 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 
 ### 方式三：发布
 
-`package.json` 的 `private` 改为 `false`（或加 `publishConfig`）后发布；`exports` 已按子路径就绪。
+本包已可直接发布：`private: false`、`exports` 已按子路径就绪、`files` 只收 `src`；
+发布前确认 `version` 与 `repository` 指向的仓库一致即可。
 
 ## 宿主根（项目根）解析
 
@@ -149,7 +150,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 | `CA/cacert.pem` | 否 | HTTPS 自定义 CA；文件缺失时回退系统 CA |
 | `log/` | 否 | 自动创建；`app-YYYY-MM-DD.log`，保留最近 3 天 |
 
-## 与原 `src/yukiLib` 的差异
+## 与抽出前实现的差异
 
 除下列几点外，行为与原实现一致（原测试用例全部保留并通过）：
 
@@ -161,7 +162,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 4. **内部引用**：库内一律相对路径（`./config.js`）；对外提供子路径导出与 `#YukiLib/*` 别名。
 5. **JSON BOM 容忍**：`config.json` / `dev.config.json` 行首 UTF-8 BOM 会被剥离
    （Windows 记事本、PowerShell 5.1 写出的文件常带 BOM，原实现会静默解析失败、取值全为 `false`）。
-6. **目录按域重组**（本次）：源码根由 `src/yukiLib/` 改为 `src/`；`appError` / `requestJson` / `router`
+6. **目录按域重组**（本次）：源码根由抽出前的位置改为 `src/`；`appError` / `requestJson` / `router`
    归入 `src/httpServer/`，子路径相应改为 `ysyuki-lib-on-nodejs/httpServer/*`，并新增子域入口
    `ysyuki-lib-on-nodejs/httpServer`。旧的 `.../appError`、`.../requestJson`、`.../router`
    子路径**不再提供**（宿主需同步改造）；类名、行为与响应契约均未变。
@@ -188,7 +189,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 | `router.map('GET', '/x/[i:id]', handler, name)` | `router.get('/x/{id:int}', handler, { name })` |
 | 处理器签名 `(ctx) => ...` | `(params, ctx) => ...`（路径参数已按类型转换） |
 | 宿主 `server.js`（handleRequest / createAppServer） | `HttpServer.create({ router, serviceName }).listen(...)` |
-| `#YukiLib/appError` | 不变（路径与类名均未变） |
+| `#YukiLib/appError` | `#YukiLib/httpServer/appError`（类名不变） |
 
 ## 验收
 
@@ -198,3 +199,7 @@ pnpm test     # node:test 全量
 ```
 
 真实数据库/SMTP 的连通性由项目所有者在部署环境验证（本库不含这两类组件）。
+
+## 许可证
+
+[MIT](./LICENSE)

@@ -1,6 +1,6 @@
 # 项目简介
 
-`ysyuki-lib-on-nodejs` 是跨项目通用的 Node.js 基础库，自 `xyz.xuezuo.basic` 的 `src/yukiLib/` 抽出，
+`ysyuki-lib-on-nodejs` 是跨项目通用的 Node.js 基础库，迁移自某内部项目，
 已按域重组（源码根 `src/`，入站 HTTP 服务端模块在 `src/httpServer/`），供多个项目共用。
 目标是"在不同项目里的库体验一致"：同一个类、同一套行为约定、同一套命名与注释风格。
 
@@ -25,7 +25,7 @@
 - 内部引用：库内一律相对路径（`./config.js`）；对外经 `exports` 子路径导出，
   并提供 `#YukiLib/*` 自引用别名，使宿主项目可沿用既有写法
 - 源码布局：源码根 `src/`；入站 HTTP 服务端框架置于 `src/httpServer/`
-  （`server` / `context` / `httpReq` / `jsonRes` / `appError` / `serverLogger` / `router` / `onion` /
+  （`server` / `context` / `httpReq` / `httpRes` / `appError` / `serverLogger` / `router` / `onion` /
   `middleware`，含子域 barrel），基础设施与出站模块置于 `src/` 根；`test/` 与 `src/` 同构镜像
 
 ## 命名风格
@@ -35,7 +35,8 @@
 
 ## 注释风格
 
-JSDoc + `// @ts-check` 语义；参考 `src/config.js` 顶部模块注释与各方法注释的写法。
+JSDoc + `jsconfig.json` 的 `checkJs`（等价于全库 `// @ts-check`）语义；
+参考 `src/config.js` 顶部模块注释与各方法注释的写法。
 
 ## 验收
 

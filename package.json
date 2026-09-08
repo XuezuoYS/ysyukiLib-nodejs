@@ -2,12 +2,32 @@
   "name": "ysyuki-lib-on-nodejs",
   "version": "0.1.0",
   "description": "通用 Node.js 基础库（配置、日志、薄路由、HTTP 客户端、请求/响应 JSON、错误与结果类型）",
-  "type": "module",
-  "private": true,
-  "engines": {
-    "node": ">= 24",
-    "packageManager": "pnpm@11.25.0"
+  "license": "MIT",
+  "author": "xuezuoys <account@xuezuo.xyz>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XuezuoYS/ysyukiLib-nodejs.git"
   },
+  "homepage": "https://github.com/XuezuoYS/ysyukiLib-nodejs#readme",
+  "bugs": {
+    "url": "https://github.com/XuezuoYS/ysyukiLib-nodejs/issues"
+  },
+  "keywords": [
+    "nodejs",
+    "esm",
+    "http-server",
+    "router",
+    "middleware",
+    "http-client",
+    "logger",
+    "config"
+  ],
+  "type": "module",
+  "private": false,
+  "engines": {
+    "node": ">= 24"
+  },
+  "packageManager": "pnpm@11.25.0",
   "exports": {
     ".": "./src/index.js",
     "./package.json": "./package.json",

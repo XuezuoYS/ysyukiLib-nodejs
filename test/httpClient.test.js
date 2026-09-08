@@ -196,6 +196,30 @@ describe('HttpClient：错误包装', () => {
     });
 });
 
+describe('HttpClient：SSL 状态', () => {
+    it('isSSL：按协议返回，并把结果写回实例状态（http 复位为 false）', () => {
+        const client = new HttpClient();
+        assert.equal(client.isSSL('https://example.test/x'), true);
+        assert.equal(client.ssl, true);
+        assert.equal(client.isSSL('http://example.test/x'), false);
+        assert.equal(client.ssl, false);
+    });
+
+    it('同一实例先 https 后 http：第二次仍按明文发送，SSL 状态不粘滞', async () => {
+        const client = new HttpClient();
+        await assert.rejects(
+            () => client.get('https://127.0.0.1:1/ssl-probe'),
+            (err) => err instanceof Error && err.message.startsWith('HTTP Request Failed:'),
+        );
+        assert.equal(client.ssl, true);
+
+        const res = await client.get(`${baseUrl()}/echo`);
+        assert.equal(res.status, 200);
+        assert.equal(JSON.parse(res.body).method, 'GET');
+        assert.equal(client.ssl, false);
+    });
+});
+
 describe('HttpClient：自定义 CA', () => {
     it('caFilePath：默认为宿主根下 CA/cacert.pem，可显式重定向', () => {
         const root = Config.getRootDir();

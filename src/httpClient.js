@@ -204,7 +204,7 @@ export class HttpClient {
     headers = {};
 
     /**
-     * 最近一次请求是否为 SSL（保留原实现的实例状态字段）
+     * 最近一次请求是否为 SSL（保留原实现的实例状态字段，随每次请求更新）
      * @type {boolean}
      */
     ssl = false;
@@ -249,16 +249,15 @@ export class HttpClient {
     /**
      * 检查URL是否使用SSL加密协议
      *
-     * 通过正则匹配URL是否以https://开头来判断是否为SSL加密连接，并记录到实例状态
+     * 通过正则匹配URL是否以https://开头来判断是否为SSL加密连接，
+     * 并把判断结果写回实例状态（http 会把 ssl 复位为 false，不保留上一次的 https 状态）
      *
      * @param {string} url 待检查URL地址
      * @returns {boolean} 返回true表示URL使用SSL加密，false表示未使用SSL加密
      */
     isSSL(url) {
         const isSsl = /^https:/i.test(url);
-        if (isSsl) {
-            this.ssl = true;
-        }
+        this.ssl = isSsl;
         return isSsl;
     }
 
@@ -325,7 +324,7 @@ export class HttpClient {
             let finalUrl = target.href;
 
             for (;;) {
-                response = await requestOnce(currentMethod, target, outbound, currentBody, this.ssl, controller.signal);
+                response = await requestOnce(currentMethod, target, outbound, currentBody, isSSL, controller.signal);
                 finalUrl = target.href;
 
                 const status = response.status;
