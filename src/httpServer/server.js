@@ -32,6 +32,8 @@ import { ServerLogger } from './serverLogger.js';
  *
  * 处理器返回值：非 undefined 即自动经 HttpRes.jsonRes 序列化为 JSON 200；
  * 未产生任何输出时补一个空 200（`emptyResponse: false` 可关闭）。
+ * 补空属文档化的正常路径，不记日志；只有整条链没走到处理器——即某个中间件既没
+ * `await next()` 也没写响应——才记 WARN（这类短路最难排查，不能让空 200 静默吞掉）。
  *
  * 签名约定：
  * - 处理器 `(params, ctx) => any`：params 为已按类型转换的路径参数，ctx 为请求上下文；
@@ -472,14 +474,25 @@ export class HttpServer {
                     (current) => this.#dispatch(current, res),
                 ])(ctx);
 
-                if (this.#options.emptyResponse && !res.headersSent && !res.writableEnded) {
-                    // 走到这里说明整条链没写出任何响应：多半是某个中间件忘了调用 next()
-                    // （静默补空 200 会让前端"拿到 200 空体"、后端完全无感知，最难排查）。
-                    // 主动写出响应的短路中间件（如 CORS 预检）已在 ctx.responded 标记，不会进这里。
-                    if (ctx.responded !== true) {
-                        ctx.logger.warn('中间件未调用 next() 且未写出响应，已补空 200', { path: ctx.path });
+                // 整条链跑完仍没有任何输出：两种成因必须区分开。
+                // ① 处理器已被派发执行、只是没产生输出——`emptyResponse` 文档化的正常路径，静默补空即可；
+                // ② 某个中间件（全局 / 分组 / 路由级）既没 `await next()` 也没写响应，
+                //    处理器根本没跑到（ctx.dispatched 从未置位）——静默补空 200 会让前端
+                //    "拿到 200 空体"、后端完全无感知，最难排查，必须告警。
+                // 主动写出响应的短路中间件（如 CORS 预检）已在 ctx.responded 标记，两种都不进。
+                const unwritten = ctx.responded !== true && !res.headersSent && !res.writableEnded;
+                if (unwritten) {
+                    if (ctx.dispatched !== true) {
+                        ctx.logger.warn(
+                            this.#options.emptyResponse
+                                ? '中间件未调用 next() 且未写出响应，已补空 200'
+                                : '中间件未调用 next() 且未写出响应（emptyResponse 已关闭，未补空响应）',
+                            { path: ctx.path },
+                        );
                     }
-                    HttpRes.fastResEmpty();
+                    if (this.#options.emptyResponse) {
+                        HttpRes.fastResEmpty();
+                    }
                 }
             });
         } catch (err) {
@@ -492,6 +505,7 @@ export class HttpServer {
      *
      * 未命中 → 404；方法不符 → 405（带 `Allow`）；命中 → 分组/路由级中间件 + 处理器。
      * 404 / 405 也经由本方法写出，因此全局中间件已先行执行（预检、鉴权、访问日志均覆盖）。
+     * 处理器执行前会置 `ctx.dispatched = true`，入口据此判定"没写出响应"是真短路还是处理器无输出。
      *
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      * @param {import('node:http').ServerResponse} res 响应对象
@@ -515,6 +529,10 @@ export class HttpServer {
         await compose([
             ...match.middleware,
             async (current) => {
+                // 标记处理器已派发执行：处理器无输出是文档化的正常路径（入口静默补空 200），
+                // 不该被误判为"中间件漏调 next()"；分组/路由级中间件漏调 next() 时本函数
+                // 不会执行，入口据此告警。
+                current.dispatched = true;
                 const result = await handler(current.params, current);
                 if (result !== undefined && !current.res.headersSent && !current.res.writableEnded) {
                     HttpRes.jsonRes(result);

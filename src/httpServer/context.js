@@ -38,6 +38,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * @property {import('./serverLogger.js').ServerLoggerRequestLog} logger 请求级日志
  * @property {Record<string, string>} [cookies] Cookie 惰性解析缓存（内部使用）
  * @property {boolean} [responded] 是否已由 HttpRes 写出过响应（内部使用，供入口识别短路中间件）
+ * @property {boolean} [dispatched] 路由处理器是否已被派发执行（内部使用，供入口把
+ *   "处理器无输出"这一文档化正常路径与"中间件漏调 next()"区分开）
  */
 
 /**

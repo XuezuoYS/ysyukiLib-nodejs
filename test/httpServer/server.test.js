@@ -79,6 +79,40 @@ async function postJson(url, body) {
     return { status: res.status, headers: res.headers, text: await res.text() };
 }
 
+/**
+ * 发一条 GET：若在 timeoutMs 内收不到响应即判定为"服务端未写响应"
+ *
+ * 用于验证 `emptyResponse: false`（不补空 200）时的挂起语义——此时 fetch 会一直等，
+ * 故用可销毁的原始请求，避免在途连接拖住 server.close()。
+ *
+ * @param {number} port 端口
+ * @param {string} path 请求路径
+ * @param {number} [timeoutMs] 判定未响应的等待上限
+ * @default timeoutMs = 300
+ * @returns {Promise<{hung: true} | {hung: false, status: number, text: string}>} 响应或挂起
+ */
+function getOrHang(port, path, timeoutMs = 300) {
+    return new Promise((resolve) => {
+        const req = http.request({ host: '127.0.0.1', port, path, agent: false }, (res) => {
+            /** @type {Buffer[]} */
+            const chunks = [];
+            res.on('data', (chunk) => chunks.push(/** @type {Buffer} */ (chunk)));
+            res.on('end', () => resolve({
+                hung: false,
+                status: res.statusCode ?? 0,
+                text: Buffer.concat(chunks).toString(),
+            }));
+        });
+        req.on('error', () => resolve({ hung: true }));
+        const timer = setTimeout(() => {
+            req.destroy();
+            resolve({ hung: true });
+        }, timeoutMs);
+        req.on('close', () => clearTimeout(timer));
+        req.end();
+    });
+}
+
 describe('HttpServer：上下文与一行式', () => {
     it('返回值自动序列化：JSON 200 + 4 空格缩进', async () => {
         const base = await startServer((router) => {
@@ -474,14 +508,65 @@ describe('HttpServer：兜底分支', () => {
         assert.match(captured[0].message, /写出到一半失败/);
     });
 
-    it('处理器无输出：补空 200（无 Content-Type）', async () => {
-        const base = await startServer((router) => {
-            router.get('/empty', () => {});
-        });
-        const res = await fetch(`${base}/empty`);
-        assert.equal(res.status, 200);
-        assert.equal(res.headers.get('content-type'), null);
-        assert.equal(await res.text(), '');
+    it('处理器无输出：补空 200（无 Content-Type），且不记 WARN', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-empty-ok-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/empty', () => {});
+            }, { logLevel: 'warn' });
+
+            /** @type {{status: number, type: string|null, text: string}[]} */
+            const results = [];
+            const entries = await captureStdoutAsync(async () => {
+                // 连发三条：修复前每条都记一次 WARN（"处理器无输出"被误归因为中间件漏调 next()），
+                // 高 QPS 空体端点会因此在生产持续刷错日志。
+                for (let i = 0; i < 3; i += 1) {
+                    const res = await fetch(`${base}/empty`);
+                    results.push({
+                        status: res.status,
+                        type: res.headers.get('content-type'),
+                        text: await res.text(),
+                    });
+                }
+            });
+
+            for (const item of results) {
+                assert.equal(item.status, 200);
+                assert.equal(item.type, null);
+                assert.equal(item.text, '');
+            }
+            // 一个中间件都没注册，谈不上"中间件漏调 next()"：这是文档化的正常路径，静默补空。
+            assert.deepEqual(entries.filter((entry) => entry.message.includes('未调用 next()')), []);
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('emptyResponse: false：处理器无输出不补空响应（客户端挂起），也不记 WARN', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-empty-off-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/empty', () => {});
+            }, { logLevel: 'warn', emptyResponse: false });
+
+            /** @type {any} */
+            let outcome;
+            const entries = await captureStdoutAsync(async () => {
+                outcome = await getOrHang(Number(new URL(base).port), '/empty');
+            });
+
+            // 关补空后不写任何响应——这是宿主显式选择的行为，不得归责于框架/中间件。
+            assert.equal(outcome.hung, true, '关闭补空后处理器无输出应无任何响应');
+            assert.deepEqual(entries.filter((entry) => entry.message.includes('未调用 next()')), []);
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
     });
 });
 
@@ -587,6 +672,73 @@ describe('HttpServer：HTTP 语义', () => {
             assert.equal(warned.length, 1);
             assert.equal(warned[0].level, 'WARN');
             assert.equal(warned[0].fields.path, '/x');
+            assert.match(warned[0].message, /已补空 200/);
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('分组/路由级中间件忘记调用 next()：同样记 WARN（处理器未被派发）', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-mw-route-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.get('/leak', () => ({ never: true }), {
+                    middleware: [async () => { /* 路由级：既没 next()，也没写响应 */ }],
+                });
+                router.group('/g', (r) => {
+                    r.use(async () => { /* 分组级：既没 next()，也没写响应 */ });
+                    r.get('/x', () => ({ never: true }));
+                });
+            }, { logLevel: 'warn' });
+
+            /** @type {any[]} */
+            const results = [];
+            const entries = await captureStdoutAsync(async () => {
+                for (const path of ['/leak', '/g/x']) {
+                    const res = await fetch(`${base}${path}`);
+                    results.push({ status: res.status, text: await res.text() });
+                }
+            });
+
+            for (const item of results) {
+                assert.equal(item.status, 200);
+                assert.equal(item.text, '');
+            }
+            const warned = entries.filter((entry) => entry.message.includes('未调用 next()'));
+            assert.equal(warned.length, 2);
+            assert.deepEqual(warned.map((entry) => entry.fields.path), ['/leak', '/g/x']);
+        } finally {
+            Logger.logDir = previousDir;
+            rmSync(logDir, { recursive: true, force: true });
+        }
+    });
+
+    it('emptyResponse: false 时中间件漏调 next()：仍记 WARN（不再静默），且不补空响应', async () => {
+        const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-mw-off-'));
+        const previousDir = Logger.logDir;
+        Logger.logDir = logDir;
+        try {
+            const base = await startServer((router) => {
+                router.use(async () => { /* 既没 next()，也没写响应 */ });
+                router.get('/x', () => ({ never: true }));
+            }, { logLevel: 'warn', emptyResponse: false });
+
+            /** @type {any} */
+            let outcome;
+            const entries = await captureStdoutAsync(async () => {
+                outcome = await getOrHang(Number(new URL(base).port), '/x');
+            });
+
+            assert.equal(outcome.hung, true, '关闭补空后不应有任何响应写出');
+            const warned = entries.filter((entry) => entry.message.includes('未调用 next()'));
+            assert.equal(warned.length, 1);
+            assert.equal(warned[0].level, 'WARN');
+            assert.equal(warned[0].fields.path, '/x');
+            // 告警文案不得声称"已补空 200"——本次并未补空
+            assert.match(warned[0].message, /emptyResponse 已关闭/);
         } finally {
             Logger.logDir = previousDir;
             rmSync(logDir, { recursive: true, force: true });
