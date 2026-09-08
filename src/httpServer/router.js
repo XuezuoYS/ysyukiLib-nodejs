@@ -1,3 +1,5 @@
+import { Logger } from '../logger.js';
+
 /**
  * 自研薄路由（FastAPI 风格模板，无第三方依赖）
  *
@@ -6,7 +8,7 @@
  * - `{name:type}`：指定类型段，内置 int / float / bool / string / hex / alpha / path / all；
  * - `{name:type?}` 或 `{name?}`：可选段（缺失时该键不出现在 params）；
  * - `{path:path}`：跨斜杠捕获（非贪婪，至少一个字符）；`{rest:all}`：跨斜杠且包含尾斜杠；
- * - `@` 前缀：整条路由按自定义正则匹配（命名组进 params，数字组丢弃）；
+ * - `@` 前缀：整条路由按自定义正则匹配（命名组进 params，数字组丢弃；缺锚定时自动补 `^...$`）；
  * - `*`：通配全部路径。
  *
  * 行为约定：
@@ -15,7 +17,14 @@
  *   status 为 hit / methodNotAllowed / notFound；路径命中而方法不符时给出 allowed（405 用）；
  * - HEAD 请求可命中 GET 路由（响应体由入口层按 HEAD 语义抑制）；
  * - 默认忽略尾斜杠（`trailingSlash: 'strict'` 可关闭）；
- * - 未知类型在注册时即抛错（自定义类型用 `addMatchTypes` 追加）。
+ * - 未知类型在注册时即抛错（自定义类型用 `addMatchTypes` 追加）；
+ * - 注册期正则护栏：`@` 模式与自定义类型片段超过 1024 字符直接抛错；疑似灾难性回溯
+ *   （嵌套量词，如 `(a+)+`）仅 `Logger.warn` 提醒——该启发式存在误报（如 `(?:[0-9]+\.)+` 安全），
+ *   故不阻断注册。
+ *
+ * 契约（安全红线）：`@` 正则与 `addMatchTypes` 片段必须是**静态、由开发者编写**的字符串，
+ * 禁止拼接请求数据；同步正则一旦灾难性回溯会占满事件循环，导致整个服务不可用。
+ * 需要匹配用户提供的模式时，请先做白名单或转义。
  *
  * 中间件：`use(...)` 注册全局中间件（分发时组合）；在 `group()` 内注册的中间件
  * 绑定到该分组后续注册的路由；`options.middleware` 绑定单条路由。
@@ -52,6 +61,47 @@ const DEFAULT_TYPES = {
  * 模板块匹配模式：前缀（`/` 或 `.`）+ `{name[:type][?]}`
  */
 const BLOCK_PATTERN = /(\/|\.|)\{([^}:?]*)(?::([^}?]+))?(\?)?\}/g;
+
+/** 正则源长度上限（`@` 模式与自定义类型片段；超长几乎必然是拼接产物） */
+const MAX_PATTERN_LENGTH = 1024;
+
+/**
+ * 疑似灾难性回溯的启发式：被量词的组内部又含量词（如 `(a+)+`、`(.*)*`）
+ *
+ * 存在误报（如 `(?:[0-9]+\.)+` 实际安全），故命中时只告警、不阻断注册。
+ */
+const NESTED_QUANTIFIER_PATTERN = /\((?:\?:)?[^()]*[+*][^()]*\)\s*[+*{]/;
+
+/** 护栏告警用的子 logger（等级固定 warn，生产环境也记录） */
+const PATTERN_GUARD_LOG = Logger.create({ level: 'warn' });
+
+/**
+ * 注册期正则护栏
+ *
+ * 超长直接抛错（服务端配置错误）；疑似灾难性回溯仅告警，避免误报阻断合法路由。
+ *
+ * @param {string} source 正则源（`@` 模式或自定义类型片段）
+ * @param {string} origin 来源描述（错误与日志用）
+ * @throws {Error} 正则源超过 MAX_PATTERN_LENGTH
+ */
+function guardPattern(source, origin) {
+    if (source.length > MAX_PATTERN_LENGTH) {
+        throw new Error(`路由正则过长（${source.length} > ${MAX_PATTERN_LENGTH}）：${origin}`);
+    }
+    if (NESTED_QUANTIFIER_PATTERN.test(source)) {
+        PATTERN_GUARD_LOG.warn('路由正则疑似灾难性回溯（嵌套量词），请确认模式不含用户输入', { origin, source });
+    }
+}
+
+/**
+ * 补锚定（`@` 模式缺 `^` / `$` 时补上；已有则不重复）
+ *
+ * @param {string} source 正则源
+ * @returns {string} 锚定后的正则源
+ */
+function anchorPattern(source) {
+    return `${source.startsWith('^') ? '' : '^'}${source}${source.endsWith('$') ? '' : '$'}`;
+}
 
 export class Router {
     /**
@@ -383,14 +433,18 @@ export class Router {
     /**
      * 编译路由的正则（map 时调用一次并缓存）
      *
-     * 无占位符且非 `@` 自定义正则时返回 regex: null（走字符串比较）。
+     * 无占位符且非 `@` 自定义正则时返回 regex: null（走字符串比较）；
+     * `@` 模式缺锚定时自动补 `^...$`，并对模式与自定义类型片段做注册期护栏。
      *
      * @param {string} route 路由模式
      * @returns {{regex: RegExp|null, paramTypes: Record<string, string>}} 锚定正则与参数类型表
+     * @throws {Error} 未知类型，或正则源超过长度上限
      */
     compileRoute(route) {
         if (route.startsWith('@')) {
-            return { regex: new RegExp(route.slice(1), 'u'), paramTypes: {} };
+            const source = route.slice(1);
+            guardPattern(source, `@${source}`);
+            return { regex: new RegExp(anchorPattern(source), 'u'), paramTypes: {} };
         }
 
         if (route === '*' || route.indexOf('{') === -1) {
@@ -408,13 +462,16 @@ export class Router {
                 throw new Error(`未知的路由类型：${type}（可用 addMatchTypes 追加）`);
             }
 
+            const typePattern = this.matchTypes[type];
+            guardPattern(typePattern, `类型 ${type}：${typePattern}`);
+
             if (name !== '') {
                 paramTypes[name] = type;
             }
 
             const prefixRegex = prefix === '.' ? '\\.' : prefix;
             const namePart = name === '' ? '' : `?<${name}>`;
-            const blockRegex = `${prefixRegex}(${namePart}${this.matchTypes[type]})`;
+            const blockRegex = `${prefixRegex}(${namePart}${typePattern})`;
             const optionalMark = optional === undefined ? '' : '?';
 
             compiled = compiled.split(block).join(`(?:${blockRegex})${optionalMark}`);

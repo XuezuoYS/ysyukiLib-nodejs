@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
+import { Logger } from '#YukiLib/logger';
 import { Router } from '#YukiLib/httpServer/router';
+
+import { captureStdout } from '../loggerFixture.js';
+
+/**
+ * 日志目录重定向到临时目录，避免护栏告警落盘污染库自身目录
+ */
+const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-router-log-'));
+Logger.logDir = logDir;
+
+after(() => {
+    Logger.logDir = null;
+    rmSync(logDir, { recursive: true, force: true });
+});
 
 /** @type {Function} 路由占位处理器 */
 const noop = () => {};
@@ -307,5 +324,60 @@ describe('Router：批量注册', () => {
         viaCtor.addRoutes([['GET', '/b', noop, { name: 'b' }]]);
         assert.equal(viaCtor.match('/b', 'GET').status, 'hit');
         assert.equal(viaCtor.getRoutes().length, 2);
+    });
+});
+
+describe('Router：注册期正则护栏与 @ 锚定', () => {
+    it('@ 模式缺锚定：自动补 ^...$，不再子串命中', () => {
+        const r = new Router();
+        r.map('GET', '@/raw/(?<n>[0-9]+)', noop);
+        assert.deepEqual(r.match('/raw/55', 'GET').params, { n: '55' });
+        assert.equal(r.match('/x/raw/55/y', 'GET').status, 'notFound');
+        assert.equal(r.match('/raw/55/y', 'GET').status, 'notFound');
+    });
+
+    it('@ 模式已写锚定：不重复补，行为不变', () => {
+        const r = new Router();
+        r.map('GET', '@^/raw/(?<n>[0-9]+)$', noop);
+        assert.deepEqual(r.match('/raw/55', 'GET').params, { n: '55' });
+        assert.equal(r.match('/x/raw/55', 'GET').status, 'notFound');
+    });
+
+    it('@ 模式超长：注册即抛错', () => {
+        assert.throws(() => new Router().map('GET', `@^/${'a'.repeat(1100)}$`, noop), /路由正则过长/);
+    });
+
+    it('自定义类型片段超长：使用该类型注册路由时抛错', () => {
+        const r = new Router({ types: { long: 'a'.repeat(1100) } });
+        assert.throws(() => r.get('/x/{v:long}', noop), /路由正则过长/);
+    });
+
+    it('嵌套量词：仅告警不阻断，注册与匹配均正常', () => {
+        const entries = captureStdout(() => {
+            const r = new Router();
+            r.map('GET', '@^/(a+)+$', noop);
+            assert.equal(r.match('/aaa', 'GET').status, 'hit');
+        });
+        const warned = entries.filter((e) => e.message.includes('灾难性回溯'));
+        assert.equal(warned.length, 1);
+        assert.equal(warned[0].level, 'WARN');
+        assert.ok(warned[0].fields.origin.includes('(a+)+'));
+    });
+
+    it('自定义类型片段的嵌套量词同样告警', () => {
+        const entries = captureStdout(() => {
+            const r = new Router({ types: { evil: '(a+)+' } });
+            r.get('/x/{v:evil}', noop);
+        });
+        assert.equal(entries.filter((e) => e.message.includes('灾难性回溯')).length, 1);
+    });
+
+    it('正常模式不告警', () => {
+        const entries = captureStdout(() => {
+            const r = new Router();
+            r.get('/user/{uid:int}', noop);
+            r.map('GET', '@^/raw/(?<n>[0-9]+)$', noop);
+        });
+        assert.deepEqual(entries, []);
     });
 });
