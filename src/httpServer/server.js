@@ -64,7 +64,11 @@ const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'];
 /**
  * 路径标准化
  *
- * 请求路径归一化：补齐首斜杠、折叠重复斜杠、剥离尾部斜杠；解码由 URL/decodeURI 原生处理。
+ * 请求路径归一化：补齐首斜杠、折叠连续斜杠（两个及以上）、剥离尾部斜杠；
+ * 解码由 URL/decodeURI 原生处理。
+ *
+ * 折叠用 `\/{2,}` 而非逐个替换 `//`：`//a///b/` 这类路径只替换一次会残留 `//`，
+ * 与 `/a/b` 归一化结果不一致，导致同一路由对"多写斜杠的请求"时而命中时而 404。
  *
  * @param {string} rawPath 原始请求路径（URL pathname）
  * @returns {string} 标准化后的匹配路径（根路径为 ''）
@@ -82,7 +86,7 @@ export function normalizePath(rawPath) {
     if (!path.endsWith('/')) {
         path += '/';
     }
-    path = path.replaceAll('//', '/');
+    path = path.replace(/\/{2,}/g, '/');
     return path.replace(/\/+$/, '');
 }
 
@@ -450,27 +454,52 @@ export class HttpServer {
      *
      * GET / HEAD 不读体；超出上限抛 413。
      *
+     * 超限后仍把剩余数据读掉（只是不再累积，内存上限不变），再抛出 413：
+     * 这样连接状态是干净的，keep-alive 连接可以继续承载下一个请求。
+     * 反之（超限即抛、剩余体留在连接里）客户端复用该连接的下一个请求会直接
+     * ECONNRESET——调用方看到的是"服务端莫名断连"。
+     *
      * @param {import('node:http').IncomingMessage} req 请求对象
      * @param {string} method 请求方法
      * @returns {Promise<string>} 请求体文本
+     * @throws {AppError} 请求体超过上限（413）
      */
-    async #readBody(req, method) {
+    #readBody(req, method) {
         if (method === 'GET' || method === 'HEAD') {
-            return '';
+            return Promise.resolve('');
         }
 
-        /** @type {Buffer[]} */
-        const chunks = [];
-        let size = 0;
-        for await (const chunk of req) {
-            const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-            size += buffer.length;
-            if (size > this.#options.bodyLimit) {
-                throw new AppError('请求体过大', 413);
-            }
-            chunks.push(buffer);
-        }
-        return Buffer.concat(chunks).toString('utf8');
+        const limit = this.#options.bodyLimit;
+
+        return new Promise((resolve, reject) => {
+            /** @type {Buffer[]} */
+            const chunks = [];
+            let size = 0;
+            let exceeded = false;
+
+            req.on('data', (chunk) => {
+                if (exceeded) {
+                    return; // 已超限：只把剩余数据读掉，不再累积
+                }
+                const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+                size += buffer.length;
+                if (size > limit) {
+                    exceeded = true;
+                    chunks.length = 0; // 立即释放已累积的请求体
+                    return;
+                }
+                chunks.push(buffer);
+            });
+            req.on('end', () => {
+                if (exceeded) {
+                    reject(new AppError('请求体过大', 413));
+                    return;
+                }
+                resolve(Buffer.concat(chunks).toString('utf8'));
+            });
+            req.on('error', reject);
+            req.on('aborted', () => reject(new AppError('请求体读取中断', 400)));
+        });
     }
 
     /**

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, describe, it } from 'node:test';
+import http from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { AppError } from '#YukiLib/httpServer/appError';
 import { HttpReq } from '#YukiLib/httpServer/httpReq';
-import { HttpServer } from '#YukiLib/httpServer/server';
+import { HttpServer, normalizePath } from '#YukiLib/httpServer/server';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Logger } from '#YukiLib/logger';
 import { Router } from '#YukiLib/httpServer/router';
@@ -174,6 +175,88 @@ describe('HttpServer：请求体解析与上限', () => {
         const res = await postJson(`${base}/x`, { big: 'x'.repeat(200) });
         assert.equal(res.status, 413);
         assert.deepEqual(JSON.parse(res.text), { status: '请求体过大' });
+    });
+
+    it('超限后连接可继续复用：剩余请求体被读掉，下一请求正常', async () => {
+        const base = await startServer((router) => {
+            router.post('/x', () => ({ ok: true }));
+        }, { bodyLimit: 1024 });
+        const port = Number(new URL(base).port);
+
+        /** 在固定 keep-alive 连接上发一个 POST，返回结果或错误码 */
+        const send = (agent, body) => new Promise((resolve) => {
+            const req = http.request({
+                host: '127.0.0.1',
+                port,
+                path: '/x',
+                method: 'POST',
+                agent,
+                headers: { 'content-type': 'application/json' },
+            }, (res) => {
+                const chunks = [];
+                res.on('data', (chunk) => chunks.push(chunk));
+                res.on('end', () => resolve({
+                    status: res.statusCode,
+                    body: Buffer.concat(chunks).toString(),
+                }));
+            });
+            req.on('error', (/** @type {any} */ err) => resolve({ error: err.code ?? err.message }));
+            req.end(body);
+        });
+
+        const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+        try {
+            const oversized = await send(agent, JSON.stringify({ big: 'x'.repeat(2 * 1024 * 1024) }));
+            assert.equal(oversized.status, 413, `超限请求应收到 413，实际 ${JSON.stringify(oversized)}`);
+            assert.deepEqual(JSON.parse(oversized.body), { status: '请求体过大' });
+
+            // 修复前：超限即抛、剩余请求体留在连接里，复用同一连接的下一个请求直接 ECONNRESET
+            const next = await send(agent, '{"a":1}');
+            assert.equal(next.error, undefined, `超限后的下一个请求不应失败：${JSON.stringify(next)}`);
+            assert.equal(next.status, 200);
+            assert.deepEqual(JSON.parse(next.body), { ok: true });
+        } finally {
+            agent.destroy();
+        }
+    });
+});
+
+describe('HttpServer：路径标准化（连续斜杠折叠）', () => {
+    it('normalizePath：连续斜杠（两个及以上）折叠为一个，其余行为不变', () => {
+        const cases = [
+            ['/', ''],
+            ['', ''],
+            ['a', '/a'],
+            ['/a', '/a'],
+            ['/a/', '/a'],
+            ['//a', '/a'],
+            ['///a', '/a'],
+            ['/a//b', '/a/b'],
+            ['/a///b', '/a/b'],
+            ['//a///b/', '/a/b'],
+            ['///health///', '/health'],
+            ['//', ''],
+            ['///', ''],
+            ['/a/b//', '/a/b'],
+            ['/%2e%2e/admin', '/../admin'],
+            ['/a%20b', '/a b'],
+            ['/a%2Fb', '/a%2Fb'],
+            ['/%ZZ', '/%ZZ'],
+        ];
+        for (const [input, expected] of cases) {
+            assert.equal(normalizePath(input), expected, `normalizePath(${JSON.stringify(input)})`);
+        }
+    });
+
+    it('多写斜杠的请求与单斜杠请求命中同一路由', async () => {
+        const base = await startServer((router) => {
+            router.get('/a/b', (_params, ctx) => ({ path: ctx.path }));
+        });
+        for (const raw of ['/a/b', '/a/b/', '//a/b', '///a///b///']) {
+            const res = await fetch(`${base}${raw}`);
+            assert.equal(res.status, 200, `${raw} 应命中路由`);
+            assert.deepEqual(await res.json(), { path: '/a/b' }, `${raw} 归一化结果`);
+        }
     });
 });
 
