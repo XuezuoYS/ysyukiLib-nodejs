@@ -258,10 +258,10 @@ describe('HttpServer：HTTP 语义', () => {
         assert.equal(await res.text(), '');
     });
 
-    it('JsonRes.redirect：307 + Location，无响应体', async () => {
+    it('JsonRes.fastResRedirect：307 + Location，无响应体', async () => {
         const base = await startServer((router) => {
             router.get('/go', () => {
-                JsonRes.redirect('/target', 303);
+                JsonRes.fastResRedirect('/target', 303);
             });
         });
         const res = await fetch(`${base}/go`, { redirect: 'manual' });

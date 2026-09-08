@@ -7,7 +7,7 @@ import { getCurrentContext } from './context.js';
  * 全项目所有响应都经本门面写出，体输出等价 PHP
  * `json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)`（契约）。
  *
- * 无响应体形态：`json(null)` / `empty(code)` / `redirect(url, code)`
+ * 无响应体形态：`json(null)` / `fastResEmpty(code)` / `fastResRedirect(url, code)`
  * 只写状态码与附加头，**不设 Content-Type、不写响应体**（重定向、空 200/204）。
  * 注意与"省略 data 参数"（值为 undefined）区分：后者仍设 Content-Type 且写出空体。
  *
@@ -15,9 +15,9 @@ import { getCurrentContext } from './context.js';
  *
  * 常用函数：
  * - json(data, httpCode)：统一 JSON 出口
- * - empty(httpCode)：无响应体（默认 200）
- * - redirect(url, httpCode)：3xx 重定向（默认 307，仅 Location 头；不终止控制流，需自行 return）
- * - error(message, httpCode)：抛 AppError，交由入口唯一兜底出口输出
+ * - fastResEmpty(httpCode)：无响应体（默认 200）
+ * - fastResRedirect(url, httpCode)：3xx 重定向（默认 307，仅 Location 头；不终止控制流，需自行 return）
+ * - fastResError(message, httpCode)：抛 AppError，交由入口唯一兜底出口输出
  * - header(name, value) / cookie(name, value, options) / status(httpCode)
  *
  */
@@ -38,7 +38,7 @@ export class JsonRes {
      *
      * @param {number} [httpCode] HTTP 状态码；省略时沿用当前状态码
      */
-    static empty(httpCode) {
+    static fastResEmpty(httpCode) {
         JsonRes.#write(getCurrentContext().res, null, httpCode, null);
     }
 
@@ -48,13 +48,13 @@ export class JsonRes {
      * 307 语义：客户端必须以相同方法与请求体重放到目标地址；
      * 若希望浏览器改用 GET 重放，显式传 303（302 在各实现中对 POST 处理不一致，不推荐）。
      *
-     * 与 error 不同：本方法不抛异常、**不终止控制流**，调用后必须自行 `return`。
+     * 与 fastResError 不同：本方法不抛异常、**不终止控制流**，调用后必须自行 `return`。
      *
      * @param {string} url 重定向目标；站内跳转用相对路径，完整 URL 不得回填内部监听地址
      * @param {number} [httpCode] HTTP 3xx 状态码
      * @default httpCode = 307
      */
-    static redirect(url, httpCode = 307) {
+    static fastResRedirect(url, httpCode = 307) {
         // url 含 CR/LF 等非法头字符时由 setHeader 抛出 ERR_INVALID_CHAR，
         // 落入口唯一兜底出口转 500，不会写出被污染的响应头（响应头注入防护）
         JsonRes.#write(getCurrentContext().res, null, httpCode, { Location: url });
@@ -70,7 +70,7 @@ export class JsonRes {
      * @param {number} [httpCode] HTTP 状态码
      * @default httpCode = 400
      */
-    static error(message = '参数错误', httpCode = 400) {
+    static fastResError(message = '参数错误', httpCode = 400) {
         throw new AppError(message, httpCode);
     }
 

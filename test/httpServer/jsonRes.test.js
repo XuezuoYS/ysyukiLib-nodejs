@@ -91,9 +91,9 @@ describe('JsonRes.json 统一 JSON 出口', () => {
     });
 });
 
-describe('JsonRes.empty 无响应体', () => {
+describe('JsonRes.fastResEmpty 无响应体', () => {
     it('默认 200：无头、无体、已结束', () => {
-        const res = writeWith(() => JsonRes.empty());
+        const res = writeWith(() => JsonRes.fastResEmpty());
         assert.equal(res.statusCode, 200);
         assert.deepEqual(Object.keys(res.headers), []);
         assert.equal(res.body, undefined);
@@ -101,22 +101,22 @@ describe('JsonRes.empty 无响应体', () => {
     });
 
     it('自定义状态码（204）', () => {
-        const res = writeWith(() => JsonRes.empty(204));
+        const res = writeWith(() => JsonRes.fastResEmpty(204));
         assert.equal(res.statusCode, 204);
     });
 
     it('省略状态码时沿用 status() 已设的值', () => {
         const res = writeWith(() => {
             JsonRes.status(204);
-            JsonRes.empty();
+            JsonRes.fastResEmpty();
         });
         assert.equal(res.statusCode, 204);
     });
 });
 
-describe('JsonRes.redirect 重定向', () => {
+describe('JsonRes.fastResRedirect 重定向', () => {
     it('默认 307：仅 Location，无 Content-Type 与响应体', () => {
-        const res = writeWith(() => JsonRes.redirect('/api/v1/target'));
+        const res = writeWith(() => JsonRes.fastResRedirect('/api/v1/target'));
         assert.equal(res.statusCode, 307);
         assert.deepEqual(Object.keys(res.headers), ['Location']);
         assert.equal(res.headers.Location, '/api/v1/target');
@@ -126,18 +126,18 @@ describe('JsonRes.redirect 重定向', () => {
 
     it('自定义状态码生效（301/302/303/308）', () => {
         for (const code of [301, 302, 303, 308]) {
-            const res = writeWith(() => JsonRes.redirect('https://example.test/a?b=1', code));
+            const res = writeWith(() => JsonRes.fastResRedirect('https://example.test/a?b=1', code));
             assert.equal(res.statusCode, code);
             assert.equal(res.headers.Location, 'https://example.test/a?b=1');
         }
     });
 });
 
-describe('JsonRes.error 快速错误', () => {
+describe('JsonRes.fastResError 快速错误', () => {
     it('默认抛 AppError(400, 参数错误)', () => {
         runIn(makeCtx(), () => {
             assert.throws(
-                () => JsonRes.error(),
+                () => JsonRes.fastResError(),
                 (err) => err instanceof AppError && err.statusCode === 400 && err.message === '参数错误',
             );
         });
@@ -146,7 +146,7 @@ describe('JsonRes.error 快速错误', () => {
     it('自定义消息与状态码', () => {
         runIn(makeCtx(), () => {
             assert.throws(
-                () => JsonRes.error('密钥错误', 401),
+                () => JsonRes.fastResError('密钥错误', 401),
                 (err) => err instanceof AppError && err.statusCode === 401 && err.message === '密钥错误',
             );
         });

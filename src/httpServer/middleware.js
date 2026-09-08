@@ -57,7 +57,7 @@ export class Middleware {
                 ctx.res.setHeader('Access-Control-Allow-Methods', methods);
                 ctx.res.setHeader('Access-Control-Allow-Headers', headers);
                 ctx.res.setHeader('Access-Control-Max-Age', String(maxAge));
-                JsonRes.empty(204);
+                JsonRes.fastResEmpty(204);
                 return;
             }
 

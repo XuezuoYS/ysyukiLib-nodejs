@@ -347,7 +347,7 @@ export class HttpServer {
                 ])(ctx);
 
                 if (this.#options.emptyResponse && !res.headersSent && !res.writableEnded) {
-                    JsonRes.empty();
+                    JsonRes.fastResEmpty();
                 }
             });
         } catch (err) {
