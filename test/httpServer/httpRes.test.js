@@ -190,6 +190,25 @@ describe('HttpRes 响应修饰', () => {
         ]);
     });
 
+    it('cookie：非法名抛普通 Error（服务端编程错误，非 AppError）', () => {
+        runIn(makeCtx(), () => {
+            for (const bad of ['', 'a b', 'a;b', 'a=b', 'a\r\nX: y', 'a[]']) {
+                assert.throws(
+                    () => HttpRes.cookie(bad, 'v'),
+                    (err) => err instanceof Error
+                        && !(err instanceof AppError)
+                        && err.message.includes('Cookie 名非法'),
+                    `非法名应抛普通 Error：${JSON.stringify(bad)}`,
+                );
+            }
+        });
+
+        const res = writeWith(() => {
+            HttpRes.cookie('__Host-sid.v1~x', 'v');
+        });
+        assert.deepEqual(res.cookieLines, ['__Host-sid.v1~x=v; Path=/; HttpOnly; SameSite=Lax']);
+    });
+
     it('请求上下文之外调用：抛明确错误', () => {
         assert.throws(
             () => HttpRes.jsonRes({ a: 1 }),

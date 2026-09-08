@@ -206,6 +206,29 @@ describe('Router：@ 自定义正则 / 通配 / basePath / 查询串', () => {
         assert.equal(r.match('/x', 'GET').status, 'notFound');
     });
 
+    it('basePath 只剥离完整前缀：/subx 不再被切成 x', () => {
+        const r = new Router({ basePath: '/sub' });
+        r.get('/x', noop);
+        assert.equal(r.match('/sub/x', 'GET').status, 'hit');
+        assert.equal(r.match('/subx', 'GET').status, 'notFound');
+        assert.equal(r.match('/subx/x', 'GET').status, 'notFound');
+    });
+
+    it('basePath 本身（含查询串）映射到根路径', () => {
+        const r = new Router({ basePath: '/sub' });
+        r.get('/', noop, 'root');
+        assert.equal(r.match('/sub', 'GET').status, 'hit');
+        assert.equal(r.match('/sub/', 'GET').status, 'hit');
+        assert.equal(r.match('/sub?a=1', 'GET').status, 'hit');
+    });
+
+    it('basePath 前缀不匹配时通配路由也不命中', () => {
+        const r = new Router({ basePath: '/sub' });
+        r.map('GET', '*', noop, 'catchall');
+        assert.equal(r.match('/sub/anything', 'GET').name, 'catchall');
+        assert.equal(r.match('/other', 'GET').status, 'notFound');
+    });
+
     it('match 内剥离查询串', () => {
         const r = new Router();
         r.get('/health', noop);

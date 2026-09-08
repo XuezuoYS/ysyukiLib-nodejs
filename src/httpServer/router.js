@@ -339,29 +339,32 @@ export class Router {
         /** @type {Set<string>} */
         const allowed = new Set();
 
-        for (const route of this.routes) {
-            const params = this.#matchRoute(route, url);
-            if (params === null) {
-                continue;
-            }
-
-            if (!matchesMethod(route.methods, method)) {
-                for (const item of route.methods) {
-                    if (item !== '*') {
-                        allowed.add(item);
-                    }
+        // basePath 不匹配（null）时直接 404：连 `*` 通配路由也不参与
+        if (url !== null) {
+            for (const route of this.routes) {
+                const params = this.#matchRoute(route, url);
+                if (params === null) {
+                    continue;
                 }
-                continue;
-            }
 
-            return {
-                status: 'hit',
-                target: route.target,
-                params,
-                name: route.name,
-                allowed: [],
-                middleware: route.middleware,
-            };
+                if (!matchesMethod(route.methods, method)) {
+                    for (const item of route.methods) {
+                        if (item !== '*') {
+                            allowed.add(item);
+                        }
+                    }
+                    continue;
+                }
+
+                return {
+                    status: 'hit',
+                    target: route.target,
+                    params,
+                    name: route.name,
+                    allowed: [],
+                    middleware: route.middleware,
+                };
+            }
         }
 
         if (allowed.size > 0) {
@@ -421,21 +424,30 @@ export class Router {
     }
 
     /**
-     * 归一化请求 URL（剥离 basePath、查询串与尾斜杠）
+     * 归一化请求 URL（剥离查询串、basePath 与尾斜杠）
+     *
+     * basePath 只剥离**完整前缀**（等于 basePath，或形如 `basePath/...`）；
+     * 前缀不匹配（如 basePath 为 `/sub` 而请求 `/subx`）返回 null，由 match 直接判 404。
      *
      * @param {string} requestUrl 原始请求 URL
-     * @returns {string} 归一化后的路径
+     * @returns {string|null} 归一化后的路径；不在 basePath 之下时为 null
      */
     #prepareUrl(requestUrl) {
         let url = requestUrl;
 
-        if (this.basePath !== '') {
-            url = url.slice(this.basePath.length);
-        }
-
         const queryIndex = url.indexOf('?');
         if (queryIndex !== -1) {
             url = url.slice(0, queryIndex);
+        }
+
+        if (this.basePath !== '') {
+            if (url === this.basePath) {
+                url = '';
+            } else if (url.startsWith(this.basePath + '/')) {
+                url = url.slice(this.basePath.length);
+            } else {
+                return null;
+            }
         }
 
         if (url === '') {

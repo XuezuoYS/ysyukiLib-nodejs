@@ -94,6 +94,23 @@ describe('Logger', () => {
         Logger.logDir = current;
         assert.equal(Logger.logDir, current);
     });
+
+    it('消息中的制表符/换行被替换为空格，不破坏行结构', () => {
+        const entries = captureStdout(() => Logger.info('a\tb\nc\rd'));
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].level, 'INFO');
+        assert.equal(entries[0].message, 'a b c d');
+    });
+
+    it('cleanup：日志目录不存在时静默返回（公开方法可安全手动调用）', () => {
+        const current = Logger.logDir;
+        Logger.logDir = join(dir, 'no-such-logdir');
+        try {
+            assert.doesNotThrow(() => Logger.cleanup());
+        } finally {
+            Logger.logDir = current;
+        }
+    });
 });
 
 describe('Logger 文件落盘与滚动', () => {

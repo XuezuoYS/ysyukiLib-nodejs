@@ -236,6 +236,25 @@ describe('HttpServer：兜底分支', () => {
         assert.ok(captured[0] instanceof TypeError);
     });
 
+    it('HttpRes.cookie 非法名：服务端编程错误 → 500 + onError 收到普通 Error', async () => {
+        /** @type {any[]} */
+        const captured = [];
+        const base = await startServer((router) => {
+            router.get('/bad-cookie', () => {
+                HttpRes.cookie('bad name', 'v');
+                return { ok: true };
+            });
+        }, { onError: (err) => captured.push(err) });
+
+        const res = await fetch(`${base}/bad-cookie`);
+        assert.equal(res.status, 500);
+        assert.deepEqual(await res.json(), { status: '服务器内部错误' });
+        assert.equal(captured.length, 1);
+        assert.ok(captured[0] instanceof Error);
+        assert.equal(captured[0] instanceof AppError, false);
+        assert.match(captured[0].message, /Cookie 名非法/);
+    });
+
     it('处理器无输出：补空 200（无 Content-Type）', async () => {
         const base = await startServer((router) => {
             router.get('/empty', () => {});

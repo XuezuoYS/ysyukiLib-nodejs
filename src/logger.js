@@ -10,6 +10,9 @@ import { Config } from './config.js';
  * `ISO时间(本地时区)\tLEVEL(大写定宽5)\t消息[\t附加字段JSON]`
  * 例：`2026-09-07T01:23:21.787+08:00\tINFO \t服务已启动\t{"host":"127.0.0.1","port":8000}`
  *
+ * 消息中的 `\t` / `\r` / `\n` 会被替换为空格（防止一条记录被拆成多行或破坏三段结构）；
+ * 附加字段经 JSON 序列化，转义由 JSON.stringify 保证。
+ *
  * 级别门控：开发环境（宿主根 dev.config.json 在场，见 Config.isDev()）记录全部级别；
  * 非开发环境仅记录 warn 与 error（stdout 与文件同门控）。
  *
@@ -106,11 +109,20 @@ export class Logger {
     /**
      * 清理超出保留数量的旧日期文件（滚动时自动调用，亦可手动调用）
      *
-     * 仅匹配 app-YYYY-MM-DD.log 命名，目录内其他文件不受影响。
+     * 仅匹配 app-YYYY-MM-DD.log 命名，目录内其他文件不受影响；
+     * 目录缺失或不可读时静默返回（公开方法，不应因环境状态抛错）。
      */
     static cleanup() {
         /** @type {string[]} */
-        const dated = readdirSync(Logger.logDir)
+        let names;
+        try {
+            names = readdirSync(Logger.logDir);
+        } catch {
+            return;
+        }
+
+        /** @type {string[]} */
+        const dated = names
             .filter((name) => new RegExp(`^${Logger.#prefix}\\d{4}-\\d{2}-\\d{2}\\.log$`).test(name))
             .sort();
         while (dated.length > Logger.#keepDays) {
@@ -168,7 +180,9 @@ export class Logger {
 
         // 行格式：ISO时间(本地时区)\tLEVEL(定宽5)\t消息[\t附加字段JSON]
         const level = levelName.toUpperCase().padEnd(5);
-        let line = `${Logger.#localIso(now)}\t${level}\t${message}`;
+        // 消息内的制表符/换行会破坏三段结构与行边界（也可用于伪造日志行），统一替换为空格
+        const text = String(message).replaceAll(/[\r\n\t]/g, ' ');
+        let line = `${Logger.#localIso(now)}\t${level}\t${text}`;
         if (Object.keys(extra).length > 0) {
             line += `\t${JSON.stringify(extra)}`;
         }

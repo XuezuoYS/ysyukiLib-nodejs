@@ -21,6 +21,13 @@ import { getCurrentContext } from './context.js';
  * - header(name, value) / cookie(name, value, options) / status(httpCode)
  *
  */
+
+/**
+ * Cookie 名合法字符集（RFC 6265 token：不含空格、控制字符与分隔符）
+ * @type {RegExp}
+ */
+const COOKIE_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
 export class HttpRes {
     /**
      * 返回 JSON 数据（统一出口）
@@ -99,7 +106,7 @@ export class HttpRes {
     /**
      * 追加 Set-Cookie（同名 Cookie 可多次调用，互不覆盖）
      *
-     * @param {string} name Cookie 名
+     * @param {string} name Cookie 名（须为 RFC 6265 token；非法名抛 Error，由入口兜底出口转 500）
      * @param {string} value Cookie 值（自动 URL 编码）
      * @param {object} [options] 属性
      * @param {string} [options.path] 路径，默认 '/'
@@ -110,9 +117,17 @@ export class HttpRes {
      * @param {boolean} [options.httpOnly] 禁止脚本读取，默认 true
      * @param {'Strict'|'Lax'|'None'} [options.sameSite] SameSite 策略，默认 'Lax'
      * @default options = {}
+     * @throws {Error} Cookie 名含非法字符（服务端编程错误，非 AppError；入口兜底出口转 500 并记 error 日志）
      */
     static cookie(name, value, options = {}) {
-        const parts = [`${name}=${encodeURIComponent(String(value))}`];
+        const cookieName = String(name);
+        if (!COOKIE_NAME_PATTERN.test(cookieName)) {
+            // 名字由服务端代码决定，非法名属服务端编程错误：抛普通 Error，
+            // 由入口兜底出口记 error 日志（含堆栈）并输出 500，而不是把责任推给客户端的 400
+            throw new Error(`Cookie 名非法：${cookieName}（须为 RFC 6265 token）`);
+        }
+
+        const parts = [`${cookieName}=${encodeURIComponent(String(value))}`];
         if (options.maxAge !== undefined) {
             parts.push(`Max-Age=${Math.floor(Number(options.maxAge))}`);
         }
