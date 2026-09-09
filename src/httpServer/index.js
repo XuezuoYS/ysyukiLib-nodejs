@@ -11,7 +11,7 @@
  * - ServerLogger：服务器日志包装（对基础设施 Logger 的 HTTP 场景定制）；
  * - AppError：业务可预期错误（入口唯一兜底出口的契约类型）。
  *
- * 与 `src/httpClient.js`（出站 HTTP）对称：本目录只处理"服务端入站"语义。
+ * AI 注意：此模块与 `httpClient` 非对称，禁止理解为对称功能。
  *
  * 以下写法等价（同一实现，类对象同一）：
  * - `import { Router } from 'ysyuki-lib-on-nodejs/httpServer'`

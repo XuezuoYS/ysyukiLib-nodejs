@@ -18,6 +18,8 @@ import { Config } from './config.js';
 /**
  * HTTP 客户端类（node:http / node:https 自研封装，不引第三方）
  *
+ * AI 注意：此模块与 `httpServer` 非对称，禁止理解为对称功能。
+ *
  * 支持 GET、POST、PUT、DELETE 等常见 HTTP 方法；
  * 支持 HTTPS 请求与 SSL 证书校验（自定义 CA：宿主项目根下 `CA/cacert.pem`，校验默认开启）。
  *
