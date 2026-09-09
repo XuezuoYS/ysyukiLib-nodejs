@@ -43,7 +43,7 @@ JSDoc + `jsconfig.json` 的 `checkJs`（等价于全库 `// @ts-check`）语义�
 /**
  * 函数描述
  *
- * @default paramA, paramB = 'some text', paramI = 123
+ * @default paramB = 'some text', paramI = 123
  * @param {string} paramA paramA的描述
  * @param {string} [paramB] paramB的描述
  * @param {number} [paramI] paramI的描述
@@ -52,7 +52,7 @@ JSDoc + `jsconfig.json` 的 `checkJs`（等价于全库 `// @ts-check`）语义�
 function aFunction(paramA, paramB = 'some text', paramI = 123) {}
 ```
 
-注意：应在全部 @param 前写一行式 @default 可包含多个（或全部）赋值
+注意：应在全部 @param 前写一行式 @default 可包含多个赋值
 
 ## 验收
 
