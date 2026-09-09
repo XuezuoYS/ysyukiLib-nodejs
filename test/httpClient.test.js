@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import https from 'node:https';
-import { after, afterEach, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,37 @@ import { Config } from '#YukiLib/config';
 let server;
 /** @type {number} */
 let port;
+
+/**
+ * 测试服务上"只有真被探测到才会 +1"的计数器
+ *
+ * 协议白名单用例的核心断言不是"抛了什么错"，而是**目标 host:port 一个请求都没收到**；
+ * 光看异常的话，"先发了请求再报错"和"根本没发请求"长得一模一样。
+ * @type {number}
+ */
+let probeHits = 0;
+
+/**
+ * 协议跳转夹具路由：pathname → 响应头 Location 原文
+ *
+ * `gopher:` / `file:` / `data:` 等都不得被跟随；`HTTP://…`（大写但合法的协议）
+ * 是正向对照，用来证明收紧没有把正常跳转一起拦掉。`/badloc` 是解析不出来的 Location。
+ *
+ * @param {number} p 测试服务端口
+ * @returns {Record<string, string>} 路由 → Location
+ */
+function redirectRoutes(p) {
+    return {
+        '/r-gopher': `gopher://127.0.0.1:${p}/probe-hit`,
+        '/r-upper': `GOPHER://127.0.0.1:${p}/probe-hit`,
+        '/r-file': 'file:///C:/Windows/win.ini',
+        '/r-data': 'data:text/html,<script>alert(1)</script>',
+        '/r-js': 'javascript:alert(1)',
+        '/r-about': 'about:blank',
+        '/r-abs-http': `HTTP://127.0.0.1:${p}/probe-hit`,
+        '/badloc': 'http://[bad',
+    };
+}
 
 /**
  * 本地回显/跳转测试服务基址
@@ -34,6 +65,19 @@ before(async () => {
             const body = Buffer.concat(chunks).toString('utf8');
             const url = new URL(req.url, 'http://127.0.0.1');
 
+            const redirect = redirectRoutes(port)[url.pathname];
+            if (redirect !== undefined) {
+                res.writeHead(302, { Location: redirect });
+                res.end();
+                return;
+            }
+            if (url.pathname === '/probe-hit') {
+                // 只有请求**真的**被发到这个 host:port 才会走到这里
+                probeHits += 1;
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end('PROBE HIT');
+                return;
+            }
             if (url.pathname === '/echo') {
                 res.writeHead(200, { 'Content-Type': 'application/json', 'X-From-Server': 'yes' });
                 res.end(JSON.stringify({
@@ -350,6 +394,162 @@ describe('HttpClient：重定向', () => {
         );
         assert.equal(client.ssl, true);
     });
+
+    it('跨协议 http→https 仍算合法跳转（白名单不收掉 https）', async () => {
+        const client = new HttpClient();
+        await assert.rejects(
+            () => client.get(`${baseUrl()}/to-https`),
+            (err) => err instanceof Error
+                && !/重定向目标协议不在允许列表内/.test(err.message)
+                && !/不支持的请求协议/.test(err.message),
+            'https: 跳转被误当成不受支持协议拦下',
+        );
+    });
+});
+
+describe('HttpClient：重定向协议白名单', () => {
+    beforeEach(() => {
+        probeHits = 0;
+        HttpClient.allowedRedirectProtocols = null;
+    });
+    afterEach(() => {
+        HttpClient.allowedRedirectProtocols = null;
+    });
+
+    it('gopher:// 跳转被拒绝，且目标 host:port 一个请求都没收到', async () => {
+        // 修复前：Location 被强制当成明文 HTTP 发出，本用例直接拿到 200 "PROBE HIT"
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/r-gopher`),
+            (err) => err instanceof Error
+                && err.message.startsWith('HTTP Request Failed: ')
+                && err.message.includes('重定向目标协议不在允许列表内：gopher:'),
+        );
+        assert.equal(probeHits, 0, '被拒绝的跳转仍然发出了请求（任意 host:port 探测面未关闭）');
+    });
+
+    it('协议大小写不影响判定（GOPHER:// 同样被拒）', async () => {
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/r-upper`),
+            (err) => err instanceof Error && err.message.includes('gopher:'),
+        );
+        assert.equal(probeHits, 0);
+    });
+
+    it('file: / data: / javascript: / about: 一律不跟随，且异常原因不为空', async () => {
+        for (const [path, protocol] of [
+            ['/r-file', 'file:'], ['/r-data', 'data:'], ['/r-js', 'javascript:'], ['/r-about', 'about:'],
+        ]) {
+            await assert.rejects(
+                () => new HttpClient().get(`${baseUrl()}${path}`),
+                (err) => err instanceof Error
+                    && err.message.startsWith('HTTP Request Failed: ')
+                    // 修复前这两条路都落在 node 的空 message AggregateError 上，尾巴是空的
+                    && err.message.slice('HTTP Request Failed: '.length).trim() !== ''
+                    && err.message.includes(protocol),
+                `${path} 应被拒绝且给出非空原因`,
+            );
+            assert.equal(probeHits, 0, `${path} 被跟随了`);
+        }
+    });
+
+    it('正向对照：大小写与绝对 URL 都不影响合法跳转', async () => {
+        const res = await new HttpClient().get(`${baseUrl()}/r-abs-http`);
+        assert.equal(res.status, 200);
+        assert.equal(res.body, 'PROBE HIT');
+        assert.equal(res.rawInfo.num_redirects, 1);
+        assert.equal(res.rawInfo.url, `${baseUrl()}/probe-hit`);
+        assert.equal(probeHits, 1);
+    });
+
+    it('拒绝时只回显协议名，不回显 Location 原文', async () => {
+        // 错误信息通常被宿主写进共享日志，Location 里可能带签名令牌或敏感路径
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/r-gopher`),
+            (err) => err instanceof Error && !err.message.includes('probe-hit'),
+        );
+    });
+
+    it('Location 解析失败仍是显式失败（不静默当成"没有跳转"）', async () => {
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/badloc`),
+            (err) => err instanceof Error && err.message === 'HTTP Request Failed: Invalid URL',
+        );
+    });
+
+    it('白名单可配置：归一化写法、可收窄、[] 表示不跟随任何跳转', async () => {
+        HttpClient.allowedRedirectProtocols = ['https'];
+        assert.deepEqual(HttpClient.allowedRedirectProtocols, ['https:']);
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/r302`),
+            (err) => err instanceof Error && err.message.includes('当前允许：https:'),
+        );
+
+        HttpClient.allowedRedirectProtocols = 'http, https';
+        assert.deepEqual(HttpClient.allowedRedirectProtocols, ['http:', 'https:']);
+        assert.equal((await new HttpClient().get(`${baseUrl()}/r302`)).status, 200);
+
+        HttpClient.allowedRedirectProtocols = new Set(['HTTPS://', 'https:']);
+        assert.deepEqual(HttpClient.allowedRedirectProtocols, ['https:'], '应归一化并去重');
+
+        HttpClient.allowedRedirectProtocols = [];
+        await assert.rejects(
+            () => new HttpClient().get(`${baseUrl()}/r302`),
+            (err) => err instanceof Error && err.message.includes('当前允许：无'),
+        );
+
+        HttpClient.allowedRedirectProtocols = null;
+        assert.deepEqual(HttpClient.allowedRedirectProtocols, ['http:', 'https:']);
+    });
+
+    it('只能收窄不能放宽：非法项抛错且不改动生效值', async () => {
+        for (const bad of [['http:', 'gopher:'], ['ftp://'], ['file'], [''], ['ht tp']]) {
+            assert.throws(
+                () => {
+                    HttpClient.allowedRedirectProtocols = bad;
+                },
+                /仅支持 http: \/ https:/,
+                `${JSON.stringify(bad)} 应被拒绝`,
+            );
+            assert.deepEqual(
+                HttpClient.allowedRedirectProtocols, ['http:', 'https:'],
+                `${JSON.stringify(bad)} 被拒后生效白名单不应改变`,
+            );
+        }
+        // 空串整体：分隔后只剩空项，同样按非法处理（不能让手滑静默变成"允许空协议"）
+        assert.throws(() => {
+            HttpClient.allowedRedirectProtocols = '';
+        }, /仅支持 http: \/ https:/);
+        assert.throws(() => {
+            HttpClient.allowedRedirectProtocols = /** @type {any} */ (42);
+        }, /需为字符串数组、Set 或逗号\/空白分隔的字符串/);
+        assert.deepEqual(HttpClient.allowedRedirectProtocols, ['http:', 'https:']);
+    });
+
+    it('getter 返回副本：改返回值不影响生效白名单', async () => {
+        const list = HttpClient.allowedRedirectProtocols;
+        list.push('ftp:', 'gopher:');
+        assert.deepEqual(HttpClient.allowedRedirectProtocols, ['http:', 'https:']);
+        assert.equal(probeHits, 0);
+        assert.equal((await new HttpClient().get(`${baseUrl()}/r302`)).status, 200);
+    });
+
+    it('白名单只作用于跳转，不作用于初始 URL', async () => {
+        HttpClient.allowedRedirectProtocols = ['https:'];
+        const res = await new HttpClient().get(`${baseUrl()}/echo`);
+        assert.equal(res.status, 200, '仅允许 https 的白名单不应拦掉显式发起的明文请求');
+    });
+
+    it('被拒后实例状态干净：累积头已清空、同实例后续请求照常', async () => {
+        const client = new HttpClient();
+        client.headerAdd({ 'X-Case': 'hygiene' });
+        await assert.rejects(() => client.get(`${baseUrl()}/r-gopher`), /重定向目标协议不在允许列表内/);
+        assert.deepEqual(client.headers, {});
+        assert.equal(probeHits, 0);
+
+        const res = await client.get(`${baseUrl()}/r302`);
+        assert.equal(res.status, 200);
+        assert.ok(res.body.startsWith('FINAL method=GET'), res.body);
+    });
 });
 
 describe('HttpClient：错误包装', () => {
@@ -358,6 +558,43 @@ describe('HttpClient：错误包装', () => {
         await assert.rejects(
             () => client.get('127.0.0.1:1/unreachable'),
             (err) => err instanceof Error && err.message.startsWith('HTTP Request Failed:'),
+        );
+    });
+
+    it('多地址连接失败（底层 message 为空）也能给出非空原因', async () => {
+        // localhost 同时解析出 ::1 与 127.0.0.1，两个地址都被拒时 node 抛 happy-eyeballs 的
+        // AggregateError：message 是**空串**，信息只在 code / errors[] 里。
+        // 修复前这里只剩 "HTTP Request Failed: "（后无内容），且 file:// 之类的跳转
+        // 正是退化成连 localhost:80 后撞上这条路径。
+        const client = new HttpClient();
+        await assert.rejects(
+            () => client.get('http://localhost:1/multi-address'),
+            (err) => {
+                assert.ok(err instanceof Error);
+                assert.ok(err.message.startsWith('HTTP Request Failed: '), err.message);
+                assert.notEqual(err.message.slice('HTTP Request Failed: '.length).trim(), '', '原因不能为空');
+                assert.match(err.message, /ECONNREFUSED/);
+                const cause = /** @type {any} */ (err.cause);
+                assert.equal(cause.code, 'ECONNREFUSED', '原始异常仍在 cause 上');
+                if (cause.message.trim() === '') {
+                    // 空 message 的 AggregateError：原因必须由 code / errors[] 补出来
+                    assert.ok(Array.isArray(cause.errors));
+                    assert.ok(cause.errors.length > 1, '本用例需要真正走到多地址聚合失败');
+                    assert.ok(err.message.includes(String(cause.errors[0].message)), err.message);
+                }
+                return true;
+            },
+        );
+    });
+
+    it('异常原因取自底层错误：单地址失败保持原有 message（不夹带 Location 等原文）', async () => {
+        const client = new HttpClient();
+        await assert.rejects(
+            () => client.get('http://127.0.0.1:1/single-address'),
+            (err) => err instanceof Error
+                && /^HTTP Request Failed: connect ECONNREFUSED 127\.0\.0\.1:1$/.test(err.message)
+                && err.cause instanceof Error
+                && /** @type {any} */ (err.cause).code === 'ECONNREFUSED',
         );
     });
 });

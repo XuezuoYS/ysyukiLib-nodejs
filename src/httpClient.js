@@ -26,6 +26,11 @@ import { Config } from './config.js';
  * - 无协议前缀的 URL 自动补 `http://`（safeUrl）；url 入参支持 `URL` 对象等非字符串（内部归一化）；
  * - 3xx 自动重定向（上限 10 次，自动 Referer；协议按每一跳的 URL 重新判定，可跨 http/https；
  *   POST 遇 301/302/303 转 GET 并丢弃请求体，307/308 保持方法）；
+ * - 重定向**只跟随 `HttpClient.allowedRedirectProtocols` 白名单内的协议**（默认仅 `http:` / `https:`）：
+ *   `gopher:` / `file:` / `data:` 之类的 Location 不会被发出，而是抛
+ *   `HTTP Request Failed: 重定向目标协议不在允许列表内：gopher:（当前允许：http: / https:）`；
+ *   与"无 Location / 超过 10 次上限仍返回该 3xx 响应"有意不同——那是没有可跟的跳转，
+ *   这是拒绝一个不该跟的跳转（只回显协议名，不回显 Location 原文）；
  * - 总超时 60s、连接超时 20s；
  * - 请求结束后清空累积请求头（实例默认头不跨请求保留）；
  * - headers 为 null 时使用 headerAdd 累积的实例头；数字键（或数组项）按原始 "Name: value" 行解析；
@@ -43,6 +48,10 @@ import { Config } from './config.js';
  *   信任私有 CA 时才配置该文件；同一路径下替换证书内容需 `closeAgents()` 重新读取。
  * - 响应体默认全量缓冲；`HttpClient.maxBodyMb` 可设置单个响应体大小上限（MB，0 为无限制），
  *   超限抛 `HTTP Request Failed: 响应体过大（上限 N MB）`。
+ * - 失败异常一律是 `HTTP Request Failed: <原因>`，原始异常留在 `cause`（`cause.code` /
+ *   `cause.errors` 对调用方可观测）；`<原因>` 保证非空：底层 `message` 为空时
+ *   （node 多地址连接失败抛的 `AggregateError`，如 `localhost` 的 `::1` 与 `127.0.0.1` 全被拒）
+ *   回退到 errno `code` 与 `errors[]` 明细，不再只剩一个空尾巴的前缀。
  *
  * 常用函数：
  * - requireHttp(method, url, headers, data):发起 HTTP 请求
@@ -56,6 +65,39 @@ const TOTAL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 20_000;
 /** 最大重定向次数 */
 const MAX_REDIRECTS = 10;
+
+/**
+ * node 传输层能承载的协议（本客户端只会说 HTTP/HTTPS）
+ *
+ * 重定向白名单与每一跳实际发出的请求都必须落在这个集合内：
+ * 配置项只能在此范围内**收窄**，不可能把 `gopher:` / `file:` 之类
+ * 重新放回跟随链（那等于把"任意 host:port 探测"的口子再开回去）。
+ * @type {readonly string[]}
+ */
+const TRANSPORT_PROTOCOLS = Object.freeze(['http:', 'https:']);
+
+/**
+ * 重定向协议白名单默认值（与浏览器一致）
+ * @type {readonly string[]}
+ */
+const DEFAULT_ALLOWED_REDIRECT_PROTOCOLS = Object.freeze(['http:', 'https:']);
+
+/**
+ * 归一化单条协议书写（容错宿主配置的各种写法）
+ *
+ * `http` / `HTTP` / `HTTPS:` / `https://` / ` http:/ ` 一律归一为 `https:` 这种
+ * "小写 + 尾部冒号"的形式——`URL#protocol` 给出的就是这个形式，比对才可能对得上。
+ *
+ * @param {any} item 协议书写
+ * @returns {string} 归一化协议（可能为空串，由调用方判非法）
+ */
+function normalizeProtocol(item) {
+    const bare = String(item).trim().toLowerCase().replace(/\/+$/, '');
+    if (bare === '') {
+        return '';
+    }
+    return bare.endsWith(':') ? bare : `${bare}:`;
+}
 
 /**
  * 自定义 CA 证书内容（懒加载缓存；null 表示尚未加载或文件缺失）
@@ -192,18 +234,68 @@ function hasHeaderName(headers, name) {
 }
 
 /**
+ * 提取可行动的失败描述（保证非空）
+ *
+ * `HTTP Request Failed: ` 后面只剩空白的缺陷来自 node 自身：多地址连接失败时
+ * （`localhost` 同时解析出 `::1` 与 `127.0.0.1`，且全部被拒），`net` 抛的是
+ * happy-eyeballs 的 **AggregateError**——它的 `message` 是**空串**，真实信息在
+ * `code`（ECONNREFUSED）与 `errors[]`（`connect ECONNREFUSED ::1:80` 等）里。
+ * 直接取 `err.message` 于是得到 `HTTP Request Failed: `，调用方无从判断病因。
+ *
+ * 取值优先级：`message` → `errors[]` 明细（必要时冠以 `code`）→ `code` →
+ * `${name}（无错误信息）`；非 Error 的抛出值取 `String(err)`，仍为空则给类型名。
+ * 只展开一层 `errors[]`，不递归（自引用结构会把栈打满）。
+ *
+ * @param {unknown} err 底层异常
+ * @returns {string} 非空失败描述
+ */
+function describeError(err) {
+    if (!(err instanceof Error)) {
+        const text = String(err ?? '').trim();
+        return text !== '' ? text : `未知错误（${typeof err}）`;
+    }
+
+    const message = err.message.trim();
+    if (message !== '') {
+        return message;
+    }
+
+    const anyErr = /** @type {any} */ (err);
+    const code = typeof anyErr.code === 'string' ? anyErr.code : '';
+    /** @type {string[]} */
+    const details = (Array.isArray(anyErr.errors) ? anyErr.errors : [])
+        .map((sub) => (sub instanceof Error ? sub.message.trim() : String(sub ?? '').trim()))
+        .filter((text) => text !== '');
+
+    if (details.length > 0) {
+        const joined = details.join('; ');
+        return code !== '' && !joined.includes(code) ? `${code}: ${joined}` : joined;
+    }
+    if (code !== '') {
+        return code;
+    }
+    return err.name !== '' ? `${err.name}（无错误信息）` : '未知错误（无错误信息）';
+}
+
+/**
  * 单次请求（不含重定向循环），Promise 化 node http/https 请求
  *
  * @param {string} method HTTP 方法
  * @param {URL} target 请求目标
  * @param {Record<string, string>} headers 规范化请求头
  * @param {string|Buffer|null} body 请求体
- * @param {boolean} isSSL 是否 HTTPS
  * @param {AbortSignal} signal 总超时信号
  * @returns {Promise<{status: number, headers: Record<string, string>, body: string, location: string|undefined}>} 响应
  */
-function requestOnce(method, target, headers, body, isSSL, signal) {
+function requestOnce(method, target, headers, body, signal) {
     return new Promise((resolve, reject) => {
+        // 协议由该跳 URL 自己决定，且在建连前校验：传输层承载不了 http/https 之外的协议，
+        // 过去把 gopher:// / file:// 之类静默改写成明文 HTTP 发出，等于开放任意 host:port 探测面。
+        if (!TRANSPORT_PROTOCOLS.includes(target.protocol)) {
+            reject(new Error(`不支持的请求协议：${target.protocol}（本客户端仅能承载 ${TRANSPORT_PROTOCOLS.join(' / ')}）`));
+            return;
+        }
+        const isSSL = target.protocol === 'https:';
         const lib = isSSL ? https : http;
         const options = {
             protocol: isSSL ? 'https:' : 'http:',
@@ -335,6 +427,74 @@ export class HttpClient {
     static maxBodyMb = 0;
 
     /**
+     * 重定向协议白名单（内部状态；null 之外的值一定是归一化后的合法列表）
+     * @type {string[]}
+     */
+    static #allowedRedirectProtocols = [...DEFAULT_ALLOWED_REDIRECT_PROTOCOLS];
+
+    /**
+     * 允许跟随的重定向协议（默认 `['http:', 'https:']`，与浏览器一致）
+     *
+     * 比对的是 `URL#protocol` 的形式（小写、带尾部冒号）；赋值时的各种写法
+     * （`http` / `HTTPS` / `https://` / 逗号或空白分隔的字符串 / `Set`）都会被归一化。
+     * 赋 `null` 恢复默认值；赋 `[]` 表示**不跟随任何重定向**（所有 3xx 跳转都会被拒绝）。
+     *
+     * **只能收窄，不能放宽**：本客户端的传输层只有 node http/https，
+     * 白名单里出现 `http` / `https` 之外的协议一律在赋值时抛错——否则
+     * "配置一下就能把 `gopher://` 当明文 HTTP 发出去"，任意 host:port 探测面又回来了。
+     *
+     * 只作用于**重定向跳**：初始 URL 经 `safeUrl` 恒为 http/https，不受本项影响。
+     * 按每一跳读取，运行期改配置即时生效（与 `maxBodyMb` 同）。
+     *
+     * @returns {string[]} 当前生效的协议白名单（副本，改动它不影响生效值）
+     */
+    static get allowedRedirectProtocols() {
+        return [...HttpClient.#allowedRedirectProtocols];
+    }
+
+    /**
+     * @param {Array<string>|Set<string>|string|null} value 协议列表（`null` 表示恢复默认）
+     * @throws {Error} 列表中出现 http/https 之外的协议，或写法无法归一化
+     */
+    static set allowedRedirectProtocols(value) {
+        if (value === null || value === undefined) {
+            HttpClient.#allowedRedirectProtocols = [...DEFAULT_ALLOWED_REDIRECT_PROTOCOLS];
+            return;
+        }
+
+        /** @type {any[]|null} */
+        let rawList = null;
+        if (Array.isArray(value)) {
+            rawList = value;
+        } else if (value instanceof Set) {
+            rawList = [...value];
+        } else if (typeof value === 'string') {
+            rawList = value.split(/[\s,]+/);
+        }
+        if (rawList === null) {
+            throw new Error('allowedRedirectProtocols 需为字符串数组、Set 或逗号/空白分隔的字符串');
+        }
+
+        /** @type {string[]} */
+        const normalized = [];
+        for (const item of rawList) {
+            const protocol = normalizeProtocol(item);
+            const supported = TRANSPORT_PROTOCOLS.includes(protocol);
+            if (!supported) {
+                // 校验先于赋值：一条非法项不能悄悄改掉宿主原本生效的白名单
+                throw new Error(
+                    `重定向协议白名单仅支持 ${TRANSPORT_PROTOCOLS.join(' / ')}，收到 "${String(item)}"`
+                    + '（本客户端的传输层承载不了其它协议，配置无法放宽）',
+                );
+            }
+            if (!normalized.includes(protocol)) {
+                normalized.push(protocol);
+            }
+        }
+        HttpClient.#allowedRedirectProtocols = normalized;
+    }
+
+    /**
      * 安全化URL处理函数
      *
      * 该函数用于确保URL具有正确的协议前缀，如果URL没有http或https协议，则默认添加http协议前缀
@@ -454,15 +614,31 @@ export class HttpClient {
 
             for (;;) {
                 // 协议按每一跳的 URL 判定：重定向可跨 http/https，不能沿用初始 URL 的判定
-                const hopIsSSL = target.protocol === 'https:';
-                this.ssl = hopIsSSL;
-                response = await requestOnce(currentMethod, target, outbound, currentBody, hopIsSSL, controller.signal);
+                // （实际用 http 还是 https 由 requestOnce 依同一份 protocol 决定，二者不可能不一致）
+                this.ssl = target.protocol === 'https:';
+                response = await requestOnce(currentMethod, target, outbound, currentBody, controller.signal);
                 finalUrl = target.href;
 
                 const status = response.status;
                 const isRedirect = status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+                // 非 3xx / 无 Location / 超出跳转次数上限：原样返回这一跳的响应（没有可跟的跳转）
                 if (!isRedirect || !response.location || redirectCount >= MAX_REDIRECTS) {
                     break;
+                }
+
+                // 先解析、先校验，再改本次请求的状态（Referer / 计数 / 方法降级）：
+                // Location 的协议必须落在白名单内（默认仅 http/https）。
+                // 解析不出来的 Location（`http://[bad`）沿用原有行为，由外层包装成
+                // `HTTP Request Failed: Invalid URL`——显式失败，不是静默不跳。
+                // 被拒绝时不回显 Location 原文——其中可能带签名令牌或敏感路径，
+                // 错误信息通常会被宿主写进共享日志（与 Config 的告警脱敏同一取向）。
+                const nextTarget = new URL(response.location, target);
+                const allowedProtocols = HttpClient.allowedRedirectProtocols;
+                if (!allowedProtocols.includes(nextTarget.protocol)) {
+                    throw new Error(
+                        `重定向目标协议不在允许列表内：${nextTarget.protocol}`
+                        + `（当前允许：${allowedProtocols.length > 0 ? allowedProtocols.join(' / ') : '无'}）`,
+                    );
                 }
 
                 // 自动重定向：自动补充 Referer（写在本次请求私有的头集合上，
@@ -476,7 +652,7 @@ export class HttpClient {
                     currentBody = null;
                 }
 
-                target = new URL(response.location, target);
+                target = nextTarget;
             }
 
             return {
@@ -495,7 +671,9 @@ export class HttpClient {
             const cause = err instanceof Error && err.name === 'AbortError'
                 ? controller.signal.reason ?? err
                 : err;
-            throw new Error(`HTTP Request Failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+            // 描述取自 describeError：底层 message 为空（node 的 happy-eyeballs AggregateError）
+            // 时回退 errno code 与 errors[] 明细，避免只剩一个没有内容的 `HTTP Request Failed: ` 前缀。
+            throw new Error(`HTTP Request Failed: ${describeError(cause)}`, { cause });
         } finally {
             clearTimeout(deadline);
             // 请求结束清空累积请求头

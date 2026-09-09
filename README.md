@@ -35,7 +35,7 @@ src/
 | --- | --- | --- |
 | `ysyuki-lib-on-nodejs/config` | `Config` | 宿主根解析、`.env` / `config.json` / `dev.config.json` 读取 |
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道）；`Logger.create({ level })` 创建等级独立的子 logger |
-| `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`、同实例并发请求头隔离） |
+| `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向＋协议白名单 `allowedRedirectProtocols`、超时、自定义 CA、响应体上限 `maxBodyMb`、同实例并发请求头隔离） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
 | `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` / `encodeUrlParam` / `HTTP_METHODS` | 入站 HTTP 服务端子域入口（barrel） |
 | `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false，`logLevel` 可选） |
@@ -449,6 +449,47 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     后续项（本次未动）：`HttpReq.getQuery` / `getParam` 的 `int` 走同一套 `Number(value)`，
     存在同类塌缩（`?id=99999999999999999999` → `1e20`）；该模块的语义是"校验不过即抛 400"，
     收口方式与路由不同，需单独评估。
+
+26. **`HttpClient` 重定向协议白名单与失败原因兜底**（本次，修复；含一条行为收紧）：
+    两个实测缺陷，都在跳转那一步。
+    - **跳转无协议白名单（任意 host:port 探测 / 协议混淆面）**：`Location` 解析出的协议从不校验，
+      而 `requestOnce` 的 `options.protocol` 只按"这一跳是不是 https"二选一地**改写**协议，
+      于是 `Location: gopher://127.0.0.1:<port>/probe` 会被当作**明文 HTTP** 发到那个 host:port——
+      实测服务端照常收下并返回 `200 PROBE HIT`，`rawInfo.url` 还谎报为 `gopher://…`
+      （等于给调用方一个"任意内网 host:port 探活"的原语）；大写 `GOPHER://` 同样命中
+      （URL 解析器已归一小写）。`file:///C:/…` 与 `data:text/html,…` 则因 `hostname` 为空
+      退化成连 **localhost:80**。现改为：解析出下一跳后先校验协议（**校验前置于**
+      `Referer` / 计数 / 方法降级等状态变更），不在白名单内直接抛
+      `HTTP Request Failed: 重定向目标协议不在允许列表内：gopher:（当前允许：http: / https:）`；
+      `requestOnce` 另设一道与配置无关的传输层不变量（协议非 http/https 即拒绝建连），
+      并去掉 `isSSL` 形参——用哪条传输层改由**该跳 URL 自己的协议**决定，
+      协议判定与实际发出请求的库从此同源，不可能再不一致。
+      新增 `HttpClient.allowedRedirectProtocols`（默认 `['http:', 'https:']`）：
+      接受数组 / `Set` / 逗号或空白分隔字符串，`http`、`HTTPS`、`https://` 等写法统一归一为
+      `https:`；赋 `null` 恢复默认，赋 `[]` 表示不跟随任何跳转。**只能收窄不能放宽**——
+      出现 http/https 之外的协议在赋值时即抛中文错误且不改动生效值（否则"配置一下"就能把
+      探测面开回去）；getter 返回副本。白名单只作用于跳转，初始 URL（经 `safeUrl` 恒为
+      http/https）不受影响。**行为收紧**：跳转协议不受支持由"照旧发出被改写的请求"变为抛错；
+      与"无 `Location` / 超过 10 次上限仍原样返回该 3xx"有意不同（那是没有可跟的跳转）。
+      异常只回显**协议名**，不回显 `Location` 原文（其中可能带签名令牌/敏感路径，
+      而同第 22 条的理由，库不该把未知内容抄进宿主共享日志）。
+    - **`HTTP Request Failed: ` 后无内容**：包装层直接取 `cause.message`，而 node 多地址连接失败
+      （`localhost` 同时解析出 `::1` 与 `127.0.0.1` 且全部被拒）抛的是 happy-eyeballs 的
+      **`AggregateError`**——`message` 是**空串**，信息只在 `code`（`ECONNREFUSED`）与
+      `errors[]`（`connect ECONNREFUSED ::1:80` 等）里。实测 `file:` 跳转与日常访问
+      `http://localhost:1/x` 都只剩一个光秃秃的前缀，调用方无从判断病因（这条不限于漏洞路径，
+      任何双栈主机连不上都是这个形状）。现由 `describeError()` 兜底：
+      `message` → `errors[]` 明细（必要时冠以 `code`）→ `code` → `${name}（无错误信息）`，
+      保证 `HTTP Request Failed: ` 后**必有非空可行动原因**；原始异常仍原样留在 `cause`
+      （`cause.code` / `cause.errors` 对调用方可观测），前缀与"超时取 `signal.reason`"不变。
+    未变量：`requireHttp` 返回值形状、重定向次数上限与自动 `Referer`、POST 遇 301/302/303 降级、
+    跨协议 http→https 跳转、超时值、CA/Agent 逻辑、并发请求头隔离（见第 21 条）、
+    `响应体过大` 文案；`Location` 解析不出来（`http://[bad`）仍报 `HTTP Request Failed: Invalid URL`。
+    测试夹具带"只有请求真被发出才会 +1"的 `probeHits` 计数——光看异常无法区分"报错前已发过请求"
+    与"根本没发"，被拒的跳转一律断言目标端点零命中。
+    后续项（本次未动，需单独评估）：跨站跳转时不剥离 `Authorization` / `Cookie`、
+    `Location: //other-host/x` 的开放重定向、以及内网地址与元数据端点
+    （`127.0.0.0/8`、`169.254.169.254` 等）与 DNS rebinding 的拦截——白名单收的是**协议**这一维。
 
 ## 从旧 API 迁移（宿主改造用）
 
