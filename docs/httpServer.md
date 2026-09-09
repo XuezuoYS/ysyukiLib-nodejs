@@ -65,7 +65,7 @@ HttpServer.create({ router, serviceName: 'example-service', logLevel: 'info' })
 
 | 情形 | 输出 |
 | --- | --- |
-| 未命中路径 | 404 `{ name, error: '404 not found', path, method }` |
+| 未命中路径 | 404 `{ name, status: '404 not found', path, method }` |
 | 路径命中、方法不符 | 405 同形状 + `Allow` 头 |
 | `AppError`（含参数校验失败、路径参数越界） | `statusCode` + `{ status: message }` |
 | 未捕获异常 | 记 error 日志（堆栈只进日志）+ 500 `{ status: '服务器内部错误' }` |

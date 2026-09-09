@@ -432,7 +432,7 @@ describe('HttpServer：兜底分支', () => {
         assert.equal(res.status, 404);
         assert.deepEqual(await res.json(), {
             name: SERVICE_NAME,
-            error: '404 not found',
+            status: '404 not found',
             path: '/missing',
             method: 'GET',
         });
@@ -448,7 +448,7 @@ describe('HttpServer：兜底分支', () => {
         assert.equal(res.headers.get('allow'), 'GET, POST');
         assert.deepEqual(await res.json(), {
             name: SERVICE_NAME,
-            error: '405 method not allowed',
+            status: '405 method not allowed',
             path: '/only-get',
             method: 'DELETE',
         });

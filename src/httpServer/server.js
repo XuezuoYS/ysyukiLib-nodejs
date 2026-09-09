@@ -621,14 +621,14 @@ export class HttpServer {
     }
 
     /**
-     * 404 契约体（`{name, error, path, method}`，对外契约勿改形状）
+     * 404 契约体（`{name, status, path, method}`，对外契约勿改形状）
      *
      * @param {import('./context.js').HttpContext} ctx 请求上下文
      */
     #writeNotFound(ctx) {
         HttpRes.jsonRes({
             name: this.#options.serviceName,
-            error: '404 not found',
+            status: '404 not found',
             path: ctx.path,
             method: ctx.method,
         }, 404);
@@ -644,7 +644,7 @@ export class HttpServer {
         HttpRes.header('Allow', allowed.join(', '));
         HttpRes.jsonRes({
             name: this.#options.serviceName,
-            error: '405 method not allowed',
+            status: '405 method not allowed',
             path: ctx.path,
             method: ctx.method,
         }, 405);
