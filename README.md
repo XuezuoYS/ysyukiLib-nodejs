@@ -27,10 +27,6 @@ pnpm add git+https://github.com/XuezuoYS/ysyukiLib-nodejs.git#v0.1.0
 pnpm add github:XuezuoYS/ysyukiLib-nodejs#semver:^0.1.0
 ```
 
-私有仓库把令牌注入 URL 即可（CI 里用 `GITHUB_TOKEN`，不需要 PAT）：
-`pnpm add git+https://<token>@github.com/XuezuoYS/ysyukiLib-nodejs.git#v0.1.0`
-
-`#` 后必须跟 tag 或 `#semver:` 范围，不写就退化成默认分支、版本不可复现。
 本库零运行时依赖、纯 JS 无构建链，装 git 依赖不需要 `prepare` 编译；锁文件记下 tag 对应的
 具体 commit，重装复现同一份源码。
 
