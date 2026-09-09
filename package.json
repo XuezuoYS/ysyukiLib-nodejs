@@ -1,6 +1,6 @@
 {
   "name": "ysyuki-lib-on-nodejs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "通用 Node.js 基础库（配置、日志、薄路由、HTTP 客户端、请求/响应 JSON、错误与结果类型）",
   "license": "MIT",
   "author": "xuezuoys <account@xuezuo.xyz>",

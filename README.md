@@ -154,7 +154,8 @@ pnpm test     # node:test 全量
 这两条就是 CI 门禁逐字执行的命令。测试脚本里 `test/*.test.js` 与 `test/**/*.test.js` 两个模式
 **必须都保留**：bash 默认（`globstar off`）下 `**` 等同 `*`，只写后者会静默漏掉 `test/` 顶层的测试文件。
 
-**发新版**：改 `package.json` 的 `version` → 推 `release` 分支。CI 依次做四件事：
+**发新版**：改 `package.json` 的 `version` 并在 [CHANGELOG.md](./CHANGELOG.md) 补一条对应版本
+（条目日期取发版当天）→ 推 `release` 分支。CI 依次做四件事：
 三系统（ubuntu / windows / macos）× Node 24 验收（外加一格 ubuntu + Node 26 探 `engines` 上界）；
 `pnpm pack` 装进临时宿主校验包边界与 `exports`；**版本门禁**——`version` 严格大于最新 `v*` tag 时
 自动打并推送 `v<version>`（相等跳过、低于报错，不允许版本回退）；最后按刚推上去的 tag 真实安装一次并冒烟。
@@ -162,6 +163,7 @@ pnpm test     # node:test 全量
 
 ## 文档
 
+- [CHANGELOG.md](./CHANGELOG.md) — 更新日志（Keep a Changelog + SemVer，与 `v*` tag 对应）
 - [docs/httpServer.md](./docs/httpServer.md) — httpServer 框架的完整行为约定
 - [docs/migrateFrom.md](./docs/migrateFrom.md) — 旧 API 迁移对照，以及历次行为/安全差异（含破坏性变更清单）
 
