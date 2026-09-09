@@ -159,12 +159,12 @@ export class HttpRes {
     /**
      * 返回 JSON 数据（统一出口）
      *
+     * @default headers = null
      * @param {any} data 响应数据；显式传 null 表示无响应体且不声明 Content-Type
      * @param {number} [httpCode] HTTP 状态码；省略时沿用当前状态码（新建响应为 200），
      * 因此 `status(201)` 之后调用 `jsonRes(data)` 不会把状态码打回 200
      * @param {Record<string, string>|null} [headers] 附加响应头；先于 Content-Type 设置，
      * 同名时由本方法覆盖
-     * @default headers = null
      */
     static jsonRes(data, httpCode, headers = null) {
         HttpRes.#write(getCurrentContext().res, data, httpCode, headers);
@@ -187,9 +187,9 @@ export class HttpRes {
      *
      * 与 fastResError 不同：本方法不抛异常、**不终止控制流**，调用后必须自行 `return`。
      *
+     * @default httpCode = 307
      * @param {string} url 重定向目标；站内跳转用相对路径，完整 URL 不得回填内部监听地址
      * @param {number} [httpCode] HTTP 3xx 状态码
-     * @default httpCode = 307
      */
     static fastResRedirect(url, httpCode = 307) {
         // url 含 CR/LF 等非法头字符时由 setHeader 抛出 ERR_INVALID_CHAR，
@@ -202,10 +202,9 @@ export class HttpRes {
      *
      * throw AppError，由入口唯一兜底出口输出 `{ "status": message }`。
      *
+     * @default message = '参数错误', httpCode = 400
      * @param {string} [message] 错误信息
-     * @default message = '参数错误'
      * @param {number} [httpCode] HTTP 状态码
-     * @default httpCode = 400
      */
     static fastResError(message = '参数错误', httpCode = 400) {
         throw new AppError(message, httpCode);
@@ -236,6 +235,7 @@ export class HttpRes {
      * 所有属性先校验再写出：非法值抛普通 Error（服务端配置错误 → 入口兜底出口记 error 日志并输出 500），
      * 不会把畸形属性写进 Set-Cookie；空值（`undefined` / `null` / `''` / `false`）一律视为未设置。
      *
+     * @default options = {}
      * @param {string} name Cookie 名（须为 RFC 6265 token）
      * @param {string} value Cookie 值（自动 URL 编码）
      * @param {object} [options] 属性
@@ -247,7 +247,6 @@ export class HttpRes {
      * @param {boolean} [options.httpOnly] 禁止脚本读取，默认 true
      * @param {string|null|false} [options.sameSite] SameSite 策略，默认 'Lax'（大小写不敏感的
      * Strict / Lax / None；`None` 需同时 `secure: true`，这是浏览器要求，库不强制）
-     * @default options = {}
      * @throws {Error} Cookie 名或任一属性值非法（服务端编程/配置错误，非 AppError）
      */
     static cookie(name, value, options = {}) {

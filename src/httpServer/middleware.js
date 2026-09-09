@@ -27,8 +27,8 @@ export class Middleware {
      * 默认 `origin: '*'`（不带凭证）。`credentials: true` 时必须显式指定非 `'*'` 的 origin，
      * 否则构造中间件时抛 Error（启动期配置错误），避免"任意站点可携带凭证调用本 API"。
      *
-     * @param {CorsOptions} [options] 选项
      * @default options = {}
+     * @param {CorsOptions} [options] 选项
      * @returns {MiddlewareFn} 中间件
      * @throws {Error} credentials 为 true 但未显式指定非 `'*'` 的 origin
      */
@@ -88,9 +88,9 @@ export class Middleware {
     /**
      * 请求标识中间件（回写响应头）
      *
+     * @default options = {}
      * @param {object} [options] 选项
      * @param {string} [options.header] 响应头名
-     * @default options = {}
      * @returns {MiddlewareFn} 中间件
      */
     static requestId(options = {}) {

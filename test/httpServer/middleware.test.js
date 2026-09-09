@@ -17,6 +17,7 @@ import { makeCtx, makeResStub, runIn } from './contextFixture.js';
 /**
  * 构造「上下文 + 响应替身」组合（断言直接看替身，避开 ServerResponse 类型）
  *
+ * @default options = {}
  * @param {Record<string, any>} [options] makeCtx 选项
  * @returns {{ctx: import('#YukiLib/httpServer/context').HttpContext, res: import('./contextFixture.js').ResStub}} 组合
  */
@@ -29,6 +30,7 @@ function makeCase(options = {}) {
 /**
  * 执行「中间件 + 处理器」链
  *
+ * @default handler = () => {}
  * @param {import('#YukiLib/httpServer/onion').Middleware} middleware 中间件
  * @param {import('#YukiLib/httpServer/context').HttpContext} ctx 上下文
  * @param {() => any} [handler] 处理器
@@ -121,6 +123,7 @@ describe('Middleware.accessLog', () => {
     /**
      * 构造带 access 捕获的上下文（访问日志由 ctx.logger.access 输出）
      *
+     * @default options = {}
      * @param {Record<string, any>} [options] makeCtx 选项
      * @returns {{ctx: import('#YukiLib/httpServer/context').HttpContext, captured: any[]}} 上下文与捕获数组
      */

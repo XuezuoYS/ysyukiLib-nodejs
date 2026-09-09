@@ -44,6 +44,7 @@ after(async () => {
 /**
  * 启动临时服务并返回基地址
  *
+ * @default options = {}
  * @param {(router: Router) => void} configure 路由配置
  * @param {Record<string, any>} [options] 服务选项覆盖
  * @returns {Promise<string>} 基地址
@@ -104,10 +105,10 @@ async function postJson(url, body) {
  * 用于验证 `emptyResponse: false`（不补空 200）时的挂起语义——此时 fetch 会一直等，
  * 故用可销毁的原始请求，避免在途连接拖住 server.close()。
  *
+ * @default timeoutMs = 300
  * @param {number} port 端口
  * @param {string} path 请求路径
  * @param {number} [timeoutMs] 判定未响应的等待上限
- * @default timeoutMs = 300
  * @returns {Promise<{hung: true} | {hung: false, status: number, text: string}>} 响应或挂起
  */
 function getOrHang(port, path, timeoutMs = 300) {
@@ -1084,6 +1085,7 @@ describe('HttpServer：优雅关闭（进程级共享信号注册）', () => {
     /**
      * 启动一个注册信号监听的临时服务
      *
+     * @default options = {}, configure = (router) => { ... }
      * @param {Record<string, any>} [options] 选项覆盖
      * @param {(router: Router) => void} [configure] 路由配置
      * @returns {Promise<{server: HttpServer, base: string}>} 实例与基地址

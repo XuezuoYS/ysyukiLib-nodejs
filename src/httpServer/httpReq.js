@@ -52,9 +52,9 @@ export class HttpReq {
      * JSON 体为严格校验；`application/x-www-form-urlencoded` 体为字符串强转，
      * 调用方无需区分来源，写法一致。
      *
+     * @default type = 'none'
      * @param {string} name 字段名
      * @param {string} [type] 类型，none 则不校验
-     * @default type = 'none'
      * @param {...any} rest 默认值（仅当显式传入时生效，用参数个数判断，支持默认值本身为 null）
      * @returns {any} 字段值或默认值
      */
@@ -71,9 +71,9 @@ export class HttpReq {
     /**
      * 获取查询串数据项
      *
+     * @default type = 'none'
      * @param {string} name 参数名
      * @param {string} [type] 类型，none 则不校验
-     * @default type = 'none'
      * @param {...any} rest 默认值（仅当显式传入时生效）
      * @returns {any} 参数值或默认值
      */
@@ -86,9 +86,9 @@ export class HttpReq {
     /**
      * 获取路径参数数据项
      *
+     * @default type = 'none'
      * @param {string} name 参数名
      * @param {string} [type] 类型，none 则不校验
-     * @default type = 'none'
      * @param {...any} rest 默认值（仅当显式传入时生效）
      * @returns {any} 参数值或默认值
      */
@@ -108,9 +108,9 @@ export class HttpReq {
      * 头缺失时返回缺省值；未显式传缺省值时按 type 返回零值（bool → false、
      * int / float → 0、array → []、string / none / 其它 → ''）。
      *
+     * @default type = 'none', defaultValue = undefined
      * @param {string} name 头名
      * @param {string} [type] 类型，none 则不校验（非已知类型名时视为缺省值）
-     * @default type = 'none'
      * @param {any} [defaultValue] 缺省值；省略时按 type 取零值
      * @returns {any} 头值（同名多值以 `, ` 连接）按 type 转换后的值，或缺省值
      */
@@ -131,9 +131,9 @@ export class HttpReq {
      * Cookie 缺失时返回缺省值；未显式传缺省值时按 type 返回零值（bool → false、
      * int / float → 0、array → []、string / none / 其它 → ''）。
      *
+     * @default type = 'none', defaultValue = undefined
      * @param {string} name Cookie 名
      * @param {string} [type] 类型，none 则不校验（非已知类型名时视为缺省值）
-     * @default type = 'none'
      * @param {any} [defaultValue] 缺省值；省略时按 type 取零值
      * @returns {any} Cookie 值按 type 转换后的值，或缺省值
      */

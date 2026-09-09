@@ -287,10 +287,10 @@ function assertBlocksParsed(route, blocks) {
  * 不会再被解析成 URL 结构（`#` 之后的内容原本根本不会发给服务器）。
  * 默认整段编码；`keepSlash: true` 保留 `/` 作为分隔符（跨斜杠类型 `{path:path}` / `{rest:all}` 用）。
  *
+ * @default options = {}
  * @param {any} value 原始值（非字符串经 String() 转换）
  * @param {object} [options] 选项
  * @param {boolean} [options.keepSlash] 是否保留斜杠作为路径分隔符
- * @default options = {}
  * @returns {string} 已编码的 URL 片段
  */
 export function encodeUrlParam(value, options = {}) {
@@ -392,12 +392,12 @@ export class Router {
     #groupStack = [];
 
     /**
+     * @default options = {}
      * @param {object} [options] 选项
      * @param {Array<[string, string, Function, (string|RouteOptions)?]>} [options.routes] 批量路由
      * @param {string} [options.basePath] 基础路径
      * @param {'ignore'|'strict'} [options.trailingSlash] 尾斜杠策略
      * @param {Record<string, string>} [options.types] 追加/覆盖的匹配类型
-     * @default options = {}
      */
     constructor(options = {}) {
         const { routes = [], basePath = '', trailingSlash = 'ignore', types = {} } = options;
@@ -496,11 +496,11 @@ export class Router {
     /**
      * 将路由映射到目标处理器
      *
+     * @default options = null
      * @param {string} method HTTP 方法，或 `|` 分隔的多方法（GET|POST），`*` 展开为 `HTTP_METHODS`
      * @param {string} route 路由模式
      * @param {Function} target 处理器 `(ctx) => any`
      * @param {string|RouteOptions|null} [options] 路由名（字符串）或选项对象 `{ name, middleware }`
-     * @default options = null
      * @throws {Error} 方法声明为空/非法，或 `*` 与其他方法并列
      */
     map(method, route, target, options = null) {
@@ -534,10 +534,10 @@ export class Router {
     /**
      * 注册 GET 路由
      *
+     * @default options = null
      * @param {string} route 路由模式
      * @param {Function} target 处理器
      * @param {string|RouteOptions|null} [options] 路由名或选项
-     * @default options = null
      */
     get(route, target, options = null) {
         this.map('GET', route, target, options);
@@ -546,10 +546,10 @@ export class Router {
     /**
      * 注册 POST 路由
      *
+     * @default options = null
      * @param {string} route 路由模式
      * @param {Function} target 处理器
      * @param {string|RouteOptions|null} [options] 路由名或选项
-     * @default options = null
      */
     post(route, target, options = null) {
         this.map('POST', route, target, options);
@@ -558,10 +558,10 @@ export class Router {
     /**
      * 注册 PUT 路由
      *
+     * @default options = null
      * @param {string} route 路由模式
      * @param {Function} target 处理器
      * @param {string|RouteOptions|null} [options] 路由名或选项
-     * @default options = null
      */
     put(route, target, options = null) {
         this.map('PUT', route, target, options);
@@ -570,10 +570,10 @@ export class Router {
     /**
      * 注册 PATCH 路由
      *
+     * @default options = null
      * @param {string} route 路由模式
      * @param {Function} target 处理器
      * @param {string|RouteOptions|null} [options] 路由名或选项
-     * @default options = null
      */
     patch(route, target, options = null) {
         this.map('PATCH', route, target, options);
@@ -582,10 +582,10 @@ export class Router {
     /**
      * 注册 DELETE 路由
      *
+     * @default options = null
      * @param {string} route 路由模式
      * @param {Function} target 处理器
      * @param {string|RouteOptions|null} [options] 路由名或选项
-     * @default options = null
      */
     delete(route, target, options = null) {
         this.map('DELETE', route, target, options);
@@ -597,10 +597,10 @@ export class Router {
      * 非标准动词不会命中本路由而是得到 405；需要放行自定义动词（WebDAV 的 `PROPFIND` 等）
      * 请显式 `map('PROPFIND', route, target, options)`。
      *
+     * @default options = null
      * @param {string} route 路由模式
      * @param {Function} target 处理器
      * @param {string|RouteOptions|null} [options] 路由名或选项
-     * @default options = null
      */
     any(route, target, options = null) {
         this.map('*', route, target, options);
@@ -612,12 +612,11 @@ export class Router {
      * 必填参数缺失时抛错（避免静默生成错误 URL）；可选段缺失时连同分隔符一起剥离；
      * 参数值默认经 `encodeUrlParam` 编码（可用 `options.encode: false` 关闭）。
      *
+     * @default params = {}, options = {}
      * @param {string} routeName 路由名称
      * @param {Record<string, any>} [params] 替换占位符的参数
-     * @default params = {}
      * @param {object} [options] 选项
      * @param {boolean} [options.encode] 是否编码参数值，默认 true
-     * @default options = {}
      * @returns {string} 生成的 URL
      * @throws {Error} 路由名不存在、必填参数缺失，或对 `@` 自定义正则路由调用时抛出
      */

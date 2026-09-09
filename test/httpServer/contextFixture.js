@@ -26,6 +26,7 @@ import { runWithContext } from '#YukiLib/httpServer/context';
 /**
  * 构造响应替身（统一出口只用到 statusCode / statusMessage / setHeader / appendHeader / end）
  *
+ * @default options = {}
  * @param {object} [options] 选项
  * @param {string} [options.statusMessage] 状态描述（默认 undefined，按标准 reason phrase 取）
  * @returns {ResStub} 替身
@@ -109,6 +110,7 @@ export function makeResStub(options = {}) {
 /**
  * 构造请求替身
  *
+ * @default options = {}
  * @param {object} [options] 选项
  * @param {Record<string, any>} [options.headers] 请求头（键小写）
  * @param {string} [options.remoteAddress] socket 远端地址
@@ -127,6 +129,7 @@ export function makeReqStub(options = {}) {
 /**
  * 构造请求上下文
  *
+ * @default options = {}
  * @param {object} [options] 选项
  * @param {string} [options.method] HTTP 方法
  * @param {string} [options.path] 请求路径

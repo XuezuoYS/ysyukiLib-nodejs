@@ -46,10 +46,10 @@ export function isFetchBlockedPort(port) {
  * 抽中禁端口时关闭并重新 `listen(0)`：系统的分配计数器会向前走，一两轮即可越过去；
  * 换用固定端口反而会带来占用与并行冲突，这里刻意不这么做。
  *
+ * @default attempts = 20
  * @param {() => Promise<number>} start 启动监听（端口传 0 由系统分配），返回实际端口
  * @param {(port: number) => Promise<void>} stop 关闭该端口的监听
  * @param {number} [attempts] 重试上限
- * @default attempts = 20
  * @returns {Promise<number>} 可被 fetch 使用的端口
  * @throws {Error} 连续抽中禁端口（正常环境不会发生，报错含最后一次端口便于排查）
  */

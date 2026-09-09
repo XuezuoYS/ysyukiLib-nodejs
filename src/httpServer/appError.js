@@ -22,12 +22,10 @@ export class AppError extends Error {
     data;
 
     /**
+     * @default message = '参数错误', statusCode = 400, data = undefined
      * @param {string} [message] 错误信息（响应体 status 字段内容）
-     * @default message = '参数错误'
      * @param {number} [statusCode] HTTP 状态码
-     * @default statusCode = 400
      * @param {any} [data] 可选附加数据
-     * @default data = undefined
      */
     constructor(message = '参数错误', statusCode = 400, data = undefined) {
         super(message);

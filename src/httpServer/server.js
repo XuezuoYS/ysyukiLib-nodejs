@@ -280,6 +280,7 @@ export class HttpServer {
     /**
      * 启动监听
      *
+     * @default port = this.#options.port, host = this.#options.host, callback = undefined
      * @param {number} [port] 端口（省略用构造选项；0 表示系统分配）
      * @param {string} [host] 监听地址
      * @param {() => void} [callback] 监听成功回调

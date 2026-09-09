@@ -16,6 +16,7 @@ import { makeCtx, makeResStub, runIn } from './contextFixture.js';
 /**
  * 在带响应替身的上下文中执行
  *
+ * @default ctxOptions = {}
  * @param {(res: import('./contextFixture.js').ResStub) => void} handler 处理函数
  * @param {Parameters<typeof makeCtx>[0]} [ctxOptions] 上下文选项覆盖（如 method: 'HEAD'）
  * @returns {import('./contextFixture.js').ResStub} 响应替身

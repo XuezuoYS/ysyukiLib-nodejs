@@ -560,12 +560,11 @@ export class HttpClient {
      * 并发安全：同一实例可同时发起多个请求，各自的 headers 入参只作用于本次请求
      * （详见类注释的行为约定）。
      *
+     * @default headers = null, data = null
      * @param {string} method 请求方法，如GET、POST、PUT、DELETE等
      * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {Record<string, any>|Array<string>|null} [headers] 添加请求头，为 null 时使用实例累积的请求头
-     * @default headers = null
      * @param {string|Buffer|null} [data] 请求数据，字符串/Buffer 原样发送；GET 方法不发送请求体
-     * @default data = null
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果
      */
     async requireHttp(method, url, headers = null, data = null) {
@@ -686,9 +685,9 @@ export class HttpClient {
      *
      * 该函数用于发送GET请求，参数为URL和请求头，返回请求结果
      *
+     * @default headers = null
      * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {Record<string, any>|Array<string>|null} [headers] 请求头，为 null 时使用实例累积的请求头
-     * @default headers = null
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果
      */
     get(url, headers = null) {
@@ -700,13 +699,11 @@ export class HttpClient {
      *
      * 该函数用于发送POST请求，参数为URL、数据、数据类型和请求头，返回请求结果
      *
+     * @default data = [], dataType = 'json', headers = null
      * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {any} [data] 请求数据，对象/数组按 dataType 自动转换，字符串原样发送
-     * @default data = []
      * @param {string} [dataType] 数据类型，可选 "json" 或 "form"
-     * @default dataType = 'json'
      * @param {Record<string, any>|Array<string>|null} [headers] 请求头，为 null 时使用实例累积的请求头
-     * @default headers = null
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果
      */
     post(url, data = [], dataType = 'json', headers = null) {
@@ -718,13 +715,11 @@ export class HttpClient {
      *
      * 该函数用于发送PUT请求，参数为URL、数据、数据类型和请求头，返回请求结果
      *
+     * @default data = [], dataType = 'json', headers = null
      * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {any} [data] 请求数据，对象/数组按 dataType 自动转换，字符串原样发送
-     * @default data = []
      * @param {string} [dataType] 数据类型，可选 "json" 或 "form"
-     * @default dataType = 'json'
      * @param {Record<string, any>|Array<string>|null} [headers] 请求头，为 null 时使用实例累积的请求头
-     * @default headers = null
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果
      */
     put(url, data = [], dataType = 'json', headers = null) {
@@ -736,6 +731,7 @@ export class HttpClient {
      *
      * 该函数用于发送DELETE请求，参数为URL和请求头，返回请求结果
      *
+     * @default headers = null
      * @param {string|URL|any} url 请求URL（URL 对象等非字符串会经 safeUrl 归一化）
      * @param {Record<string, any>|Array<string>|null} [headers] 请求头，为 null 时使用实例累积的请求头
      * @returns {Promise<{status: number, headers: Record<string, string>, body: string, rawInfo: HttpClientRawInfo}>} 请求结果

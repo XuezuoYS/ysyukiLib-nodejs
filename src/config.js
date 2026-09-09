@@ -262,8 +262,8 @@ export class Config {
      * 会重置根目录缓存、配置缓存与 devConfigFile 显式指定值，
      * 使后续取值全部基于新的根目录；传 null 恢复自动解析。
      *
-     * @param {string|null} [dir] 根目录绝对路径；null 表示恢复自动解析
      * @default dir = null
+     * @param {string|null} [dir] 根目录绝对路径；null 表示恢复自动解析
      * @returns {void}
      */
     static setRootDir(dir = null) {
@@ -468,10 +468,10 @@ export class Config {
      * `reason` 必须是调用方已经确认**不含文件内容**的文本（errno 码、固定文案、typeof），
      * 不得再把异常的 `message` 直接传进来：见 {@link Config.#parseFailureReason}。
      *
+     * @default missing = false
      * @param {string} file 配置文件绝对路径
      * @param {string} reason 脱敏后的失败原因
      * @param {boolean} [missing] 是否为"文件不存在"（决定告警文案）
-     * @default missing = false
      */
     static #warnConfigUnavailable(file, reason, missing = false) {
         if (Config.#hasWarnedConfig) {

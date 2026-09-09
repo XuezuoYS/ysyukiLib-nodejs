@@ -105,9 +105,9 @@ function localDate(now) {
  */
 function localIso(now) {
     /**
+     * @default w = 2
      * @param {number} n 待补零的数值
      * @param {number} [w] 目标位数
-     * @default w = 2
      * @returns {string} 补零后的字符串
      */
     const pad = (n, w = 2) => String(n).padStart(w, '0');
@@ -484,11 +484,11 @@ function emergencyLine(now, level, message, err) {
  * 把"记一条日志"变成炸宿主。构造失败退化为兜底行；stdout 与文件两通道各自独立失败，
  * 任一不可用都不影响另一个。
  *
+ * @default fields = {}
  * @param {'info'|'warn'|'error'} threshold 记录等级阈值
  * @param {'info'|'warn'|'error'} level 本条日志等级
  * @param {string} message 日志消息
  * @param {Record<string, any>} [fields] 附加字段（Error 序列化为 message+stack）
- * @default fields = {}
  */
 function writeLine(threshold, level, message, fields = {}) {
     if (LEVEL_ORDER[level] < LEVEL_ORDER[threshold]) {
@@ -532,9 +532,9 @@ export class SubLogger {
     #level = null;
 
     /**
+     * @default options = {}
      * @param {object} [options] 选项
      * @param {'info'|'warn'|'error'} [options.level] 记录等级；省略时跟随 Logger.defaultLevel
-     * @default options = {}
      */
     constructor(options = {}) {
         this.level = options.level ?? null;
@@ -663,9 +663,9 @@ export class Logger {
     /**
      * 创建等级独立的子 logger
      *
+     * @default options = {}
      * @param {object} [options] 选项
      * @param {'info'|'warn'|'error'} [options.level] 记录等级；省略时跟随 Logger.defaultLevel
-     * @default options = {}
      * @returns {SubLogger} 子 logger
      */
     static create(options = {}) {

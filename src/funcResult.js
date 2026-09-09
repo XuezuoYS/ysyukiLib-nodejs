@@ -18,13 +18,11 @@
  */
 export class FuncResult {
     /**
+     * @default message = '', data = null, code = 0
      * @param {boolean} success 是否成功
      * @param {string} [message] 提示信息
-     * @default message = ''
      * @param {any} [data] 业务数据
-     * @default data = null
      * @param {number} [code] 状态码
-     * @default code = 0
      */
     constructor(success, message = '', data = null, code = 0) {
         this.success = success;
@@ -37,12 +35,10 @@ export class FuncResult {
     /**
      * 构造成功结果
      *
+     * @default data = null, code = 0, message = '成功'
      * @param {any} [data] 业务数据
-     * @default data = null
      * @param {number} [code] 状态码
-     * @default code = 0
      * @param {string} [message] 提示信息
-     * @default message = '成功'
      * @returns {FuncResult} 成功结果
      */
     static ok(data = null, code = 0, message = '成功') {
@@ -52,9 +48,9 @@ export class FuncResult {
     /**
      * 构造失败结果
      *
+     * @default code = 0
      * @param {string} message 提示信息
      * @param {number} [code] 状态码
-     * @default code = 0
      * @returns {FuncResult} 失败结果
      */
     static fail(message, code = 0) {

@@ -53,8 +53,8 @@ export class ServerLogger {
     #log;
 
     /**
-     * @param {ServerLoggerOptions} [options] 选项
      * @default options = {}
+     * @param {ServerLoggerOptions} [options] 选项
      */
     constructor(options = {}) {
         this.#serviceName = options.serviceName === undefined ? '' : String(options.serviceName);
@@ -171,9 +171,9 @@ export class ServerLogger {
     /**
      * 一般信息日志（自动附加服务名）
      *
+     * @default fields = {}
      * @param {string} message 日志消息
      * @param {Record<string, any>} [fields] 附加字段
-     * @default fields = {}
      */
     info(message, fields = {}) {
         this.#log.info(message, this.#base(fields));
@@ -182,9 +182,9 @@ export class ServerLogger {
     /**
      * 警告日志（自动附加服务名）
      *
+     * @default fields = {}
      * @param {string} message 日志消息
      * @param {Record<string, any>} [fields] 附加字段
-     * @default fields = {}
      */
     warn(message, fields = {}) {
         this.#log.warn(message, this.#base(fields));
@@ -193,10 +193,10 @@ export class ServerLogger {
     /**
      * 错误日志（Error 对象由 Logger 序列化为 message + stack）
      *
+     * @default fields = {}
      * @param {string} message 日志消息
      * @param {any} [err] 错误对象
      * @param {Record<string, any>} [fields] 附加字段
-     * @default fields = {}
      */
     error(message, err, fields = {}) {
         this.#log.error(message, this.#base({ ...fields, err }));
