@@ -35,7 +35,7 @@ src/
 | --- | --- | --- |
 | `ysyuki-lib-on-nodejs/config` | `Config` | 宿主根解析、`.env` / `config.json` / `dev.config.json` 读取 |
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道）；`Logger.create({ level })` 创建等级独立的子 logger |
-| `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`） |
+| `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`、同实例并发请求头隔离） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
 | `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` / `encodeUrlParam` | 入站 HTTP 服务端子域入口（barrel） |
 | `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false，`logLevel` 可选） |
@@ -331,6 +331,23 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     状态 WARN；写出本身失败（如非法状态码）时不记，此时实际返回客户端的是入口兜底出口
     写出的状态码。是否真正记录随所属 `HttpServer` 实例的日志等级阈值（生产默认 warn：
     1/2/3 丢弃、4/5 保留；开发 info 则全记）。此前 4xx/5xx 除 500 的 ERROR 日志外完全静默。
+
+21. **`HttpClient` 同实例并发请求头隔离**（本次，修复）：`requireHttp` 此前把调用方传入的请求头
+    经 `headerAdd` **合并回实例共享状态** `this.headers`，再据此发出请求，于是同一实例上并发的
+    请求会互相带上对方的头——实测 `Promise.all([get(a, { 'X-Tenant': SECRET }), get(b, { Authorization: … })])`
+    会让服务端在 `b` 上收到 `x-tenant: <SECRET>`，属**凭据跨请求泄漏**（原测试全部串行，零覆盖）。
+    `post` / `put` 由 `dataType` 自动生成的 `Content-Type` 同样写进共享状态，会外溢到并发的其它请求
+    （并发的无体 GET 会带上 `content-type: application/json`）。
+    现改为：每次请求在入口处把"实例累积头（作默认值）+ 调用方头（覆盖）"合成为**本次请求私有**的
+    头集合，全程不回写 `this.headers`；重定向各跳的 `Referer` 也只追加在这份私有集合上。
+    自动 `Content-Type` 改由内部参数传递，且只在调用方未声明同名头时补上（大小写与原始行写法
+    均算已声明，故 `{'content-type': 'text/csv'}` 与 `['Content-Type: …']` 都能覆盖自动值）。
+    既有契约未变：`headerAdd` 仍是实例级默认头、请求结束（含失败）仍清空且不跨请求保留、
+    `headers === null` 仍取累积头、数字键 / 数组项仍按 `"Name: value"` 原始行解析、
+    调用方显式 `Content-Type` 仍优先于 `dataType` 自动值。
+    用法约定随之写明：**单次凭据请走 headers 入参**，不要 `headerAdd` 进实例（那是共享状态）；
+    `client.url` / `client.ssl` 只是排障观测值，并发下由最后写入者决定，某次请求的最终 URL
+    取该次返回值的 `rawInfo.url`。
 
 ## 从旧 API 迁移（宿主改造用）
 

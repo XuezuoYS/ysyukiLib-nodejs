@@ -204,6 +204,116 @@ describe('HttpClient：基础请求与回显', () => {
     });
 });
 
+describe('HttpClient：同实例并发（请求头隔离）', () => {
+    it('并发请求的调用方头互不污染（凭据不跨请求泄漏）', async () => {
+        const client = new HttpClient();
+        const [resA, resB] = await Promise.all([
+            client.get(`${baseUrl()}/echo?a=1`, { 'X-Tenant': 'TENANT-A-SECRET' }),
+            client.get(`${baseUrl()}/echo?b=1`, { Authorization: 'Bearer TOKEN-B' }),
+        ]);
+        const echoA = JSON.parse(resA.body);
+        const echoB = JSON.parse(resB.body);
+
+        assert.equal(echoA.url, '/echo?a=1');
+        assert.equal(echoB.url, '/echo?b=1');
+        assert.equal(echoA.headers['x-tenant'], 'TENANT-A-SECRET');
+        assert.equal(echoB.headers['authorization'], 'Bearer TOKEN-B');
+        // 修复前：调用方头被 headerAdd 合并回实例共享状态，后发起的请求带上了前一个请求的头
+        assert.equal(echoB.headers['x-tenant'], undefined, '请求 A 的租户头泄漏到了请求 B');
+        assert.equal(echoA.headers['authorization'], undefined, '请求 B 的凭据泄漏到了请求 A');
+    });
+
+    it('调用方头不写回实例累积头（请求进行中即可观测）', async () => {
+        const client = new HttpClient();
+        const pending = client.get(`${baseUrl()}/echo`, { 'X-Tenant': 'TENANT-A-SECRET' });
+        assert.deepEqual(client.headers, {}, '调用方头被合并进了实例共享状态');
+        await pending;
+        assert.deepEqual(client.headers, {});
+    });
+
+    it('实例累积头作默认值：对并发每个请求都生效，且不被别的请求的头污染', async () => {
+        const client = new HttpClient();
+        client.headerAdd({ 'X-Common': 'shared-default' });
+        const [resA, resB] = await Promise.all([
+            client.get(`${baseUrl()}/echo?a=1`, { 'X-Tenant': 'A' }),
+            client.get(`${baseUrl()}/echo?b=1`),
+        ]);
+        const headersA = JSON.parse(resA.body).headers;
+        const headersB = JSON.parse(resB.body).headers;
+
+        assert.equal(headersA['x-common'], 'shared-default');
+        assert.equal(headersB['x-common'], 'shared-default');
+        assert.equal(headersA['x-tenant'], 'A');
+        assert.equal(headersB['x-tenant'], undefined, '并发请求 A 的私有头泄漏到了未传头的请求 B');
+        assert.deepEqual(client.headers, {}, '请求结束后累积头应被清空');
+    });
+
+    it('并发 POST 的自动 Content-Type 不外溢到同实例的其它请求', async () => {
+        const client = new HttpClient();
+        const [resPost, resGet] = await Promise.all([
+            client.post(`${baseUrl()}/echo`, { a: 1 }),
+            client.get(`${baseUrl()}/echo`),
+        ]);
+        assert.equal(JSON.parse(resPost.body).headers['content-type'], 'application/json');
+        assert.equal(JSON.parse(resGet.body).headers['content-type'], undefined,
+            'POST 自动生成的 Content-Type 泄漏到了并发 GET');
+    });
+
+    it('并发 json / form：两个请求各自的 Content-Type 不串台', async () => {
+        const client = new HttpClient();
+        const [resJson, resForm] = await Promise.all([
+            client.post(`${baseUrl()}/echo`, { a: 1 }, 'json'),
+            client.post(`${baseUrl()}/echo`, { a: 1 }, 'form'),
+        ]);
+        const echoJson = JSON.parse(resJson.body);
+        const echoForm = JSON.parse(resForm.body);
+        assert.equal(echoJson.headers['content-type'], 'application/json');
+        assert.equal(echoJson.body, '{"a":1}');
+        assert.equal(echoForm.headers['content-type'], 'application/x-www-form-urlencoded');
+        assert.equal(echoForm.body, 'a=1');
+    });
+
+    it('调用方显式 Content-Type 优先于 dataType 自动值（对象头 / 原始行头）', async () => {
+        const client = new HttpClient();
+        let res = await client.post(`${baseUrl()}/echo`, { a: 1 }, 'json', { 'content-type': 'text/csv' });
+        assert.equal(JSON.parse(res.body).headers['content-type'], 'text/csv');
+
+        const client2 = new HttpClient();
+        res = await client2.post(`${baseUrl()}/echo`, { a: 1 }, 'form', ['Content-Type: application/octet-stream']);
+        assert.equal(JSON.parse(res.body).headers['content-type'], 'application/octet-stream');
+    });
+
+    it('并发重定向：每条链的 Referer 只属于自己的上一跳', async () => {
+        const client = new HttpClient();
+        const [resA, resB] = await Promise.all([
+            client.get(`${baseUrl()}/r302?chain=a`),
+            client.get(`${baseUrl()}/r302?chain=b`),
+        ]);
+        assert.ok(resA.body.includes(`referer=${baseUrl()}/r302?chain=a`), resA.body);
+        assert.ok(resB.body.includes(`referer=${baseUrl()}/r302?chain=b`), resB.body);
+    });
+
+    it('高并发 8 路：每个请求只带自己的头与自己的路径', async () => {
+        const client = new HttpClient();
+        const results = await Promise.all(Array.from({ length: 8 }, (_, i) =>
+            client.get(`${baseUrl()}/echo?i=${i}`, { 'X-Case': `case-${i}`, Authorization: `Bearer t-${i}` })));
+
+        results.forEach((res, i) => {
+            const echo = JSON.parse(res.body);
+            assert.equal(echo.url, `/echo?i=${i}`);
+            assert.equal(echo.headers['x-case'], `case-${i}`);
+            assert.equal(echo.headers['authorization'], `Bearer t-${i}`);
+            for (let j = 0; j < 8; j += 1) {
+                if (j === i) {
+                    continue;
+                }
+                assert.notEqual(echo.headers['x-case'], `case-${j}`, `请求 ${i} 带上了请求 ${j} 的头`);
+            }
+        });
+        assert.deepEqual(client.headers, {});
+    });
+});
+
 describe('HttpClient：重定向', () => {
     it('302 自动跳转：POST 降级为 GET 且自动 Referer', async () => {
         const client = new HttpClient();
