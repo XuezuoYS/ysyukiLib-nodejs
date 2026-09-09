@@ -453,6 +453,68 @@ describe('HttpServer：兜底分支', () => {
         });
     });
 
+    it('路径命中但 int 参数超出可精确表示范围：400 非法参数（不回显 URL 原文）', async () => {
+        const base = await startServer((router) => {
+            router.get('/user/{id:int}', (params) => ({ id: params.id, type: typeof params.id }));
+            router.get('/file/{name}', (params) => ({ name: params.name }));
+        });
+
+        // 修复前：…99 与 …98 都命中并给出同一个 1e20（鉴权/查库混淆面）
+        for (const url of ['/user/99999999999999999999', '/user/99999999999999999998', `/user/${'9'.repeat(310)}`]) {
+            const res = await fetch(`${base}${url}`);
+            assert.equal(res.status, 400, `${url} 应判非法参数，而不是静默塌缩`);
+            const body = await res.json();
+            assert.deepEqual(body, { status: '路径参数 id 不是合法的 int' });
+            assert.ok(!JSON.stringify(body).includes('99999999999999'), '不应把 URL 原文回显给客户端');
+        }
+
+        // 要原始文本就用 string 段
+        const asText = await fetch(`${base}/file/99999999999999999999`);
+        assert.equal(asText.status, 200);
+        assert.deepEqual(await asText.json(), { name: '99999999999999999999' });
+
+        // 可精确表示的值照常命中；007 → 7 是保留行为
+        const ok = await fetch(`${base}/user/007`);
+        assert.equal(ok.status, 200);
+        assert.deepEqual(await ok.json(), { id: 7, type: 'number' });
+    });
+
+    it('400 非法路径参数经 AppError 出口：onError 钩子收到 AppError(400)', async () => {
+        /** @type {any[]} */
+        const captured = [];
+        const base = await startServer((router) => {
+            router.get('/user/{id:int}', () => ({}));
+        }, { onError: (err) => captured.push(err) });
+
+        const res = await fetch(`${base}/user/${'9'.repeat(310)}`);
+        assert.equal(res.status, 400);
+        assert.deepEqual(await res.json(), { status: '路径参数 id 不是合法的 int' });
+        assert.equal(captured.length, 1);
+        assert.ok(captured[0] instanceof AppError);
+        assert.equal(captured[0].statusCode, 400);
+    });
+
+    it('any() 路由对非标准动词返回 405，Allow 为展开后的标准方法集合', async () => {
+        const base = await startServer((router) => {
+            router.any('/x', () => ({ ok: true }));
+        });
+
+        assert.equal((await fetch(`${base}/x`, { method: 'DELETE' })).status, 200);
+        // PROPFIND 由 Node 的 HTTP 解析器放行（能进到路由层），但不属于标准方法集合
+        const miss = await fetch(`${base}/x`, { method: 'PROPFIND' });
+        assert.equal(miss.status, 405);
+        assert.equal(
+            miss.headers.get('allow'),
+            'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE, CONNECT',
+        );
+        assert.deepEqual(await miss.json(), {
+            name: SERVICE_NAME,
+            error: '405 method not allowed',
+            path: '/x',
+            method: 'PROPFIND',
+        });
+    });
+
     it('AppError：{status: message} + statusCode', async () => {
         const base = await startServer((router) => {
             router.post('/boom', () => {

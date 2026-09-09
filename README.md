@@ -22,7 +22,7 @@ src/
     httpRes.js              HttpRes：响应侧一行式输出
     appError.js             业务可预期错误
     serverLogger.js         ServerLogger：服务器日志包装（包装 src/logger.js）
-    router.js               模板路由（{id} / {id:int}、分组、405、HEAD）
+    router.js               模板路由（{id} / {id:int}、分组、405、HEAD、注册期语法校验）
     onion.js                中间件洋葱组合
     middleware.js           Middleware：cors / accessLog / requestId（opt-in）
 ```
@@ -37,14 +37,14 @@ src/
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` | 结构化日志（stdout + `log/app-YYYY-MM-DD.log` 双通道）；`Logger.create({ level })` 创建等级独立的子 logger |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` | 出站 HTTP/HTTPS 客户端（重定向、超时、自定义 CA、响应体上限 `maxBodyMb`、同实例并发请求头隔离） |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` | 不可变业务结果对象 |
-| `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` / `encodeUrlParam` | 入站 HTTP 服务端子域入口（barrel） |
+| `ysyuki-lib-on-nodejs/httpServer` | `AppError` / `HttpReq` / `HttpServer` / `HttpRes` / `Middleware` / `Router` / `ServerLogger` / `encodeUrlParam` / `HTTP_METHODS` | 入站 HTTP 服务端子域入口（barrel） |
 | `ysyuki-lib-on-nodejs/httpServer/server` | `HttpServer` | 服务入口：create / listen / 兜底出口 / 超时 / 优雅关闭（进程级共享信号注册，`exitOnShutdown` 默认 false，`logLevel` 可选） |
 | `ysyuki-lib-on-nodejs/httpServer/context` | `runWithContext` / `getCurrentContext` / `tryGetCurrentContext` | 请求上下文（AsyncLocalStorage） |
 | `ysyuki-lib-on-nodejs/httpServer/httpReq` | `HttpReq` | 请求侧一行式取值（body / query / param / header / cookie / ip） |
 | `ysyuki-lib-on-nodejs/httpServer/httpRes` | `HttpRes` | 响应侧一行式输出（jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie） |
 | `ysyuki-lib-on-nodejs/httpServer/appError` | `AppError` | 业务可预期错误（入口兜底出口依赖） |
 | `ysyuki-lib-on-nodejs/httpServer/serverLogger` | `ServerLogger` | 服务器日志（实例化：服务名与等级随实例，`new ServerLogger({ serviceName, level })`）；`response` 按状态码分级记响应状态日志 |
-| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` / `encodeUrlParam` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由、注册期正则护栏、块外字面量转义）；`encodeUrlParam` 为 URL 参数编码 |
+| `ysyuki-lib-on-nodejs/httpServer/router` | `Router` / `encodeUrlParam` / `HTTP_METHODS` | 模板路由（`{id}` / `{id:int}`、分组、405、HEAD、反向路由、注册期正则护栏与模板/方法声明校验、块外字面量转义、`int` / `float` 参数无损转换）；`encodeUrlParam` 为 URL 参数编码，`HTTP_METHODS` 是 `*` / `any()` 的展开表 |
 | `ysyuki-lib-on-nodejs/httpServer/middleware` | `Middleware` | 内置可选中间件（cors / accessLog / requestId）；`cors` 默认 `origin: '*'`，`credentials: true` 须显式指定非 `'*'` 的 origin |
 | `ysyuki-lib-on-nodejs/httpServer/onion` | `compose` | 中间件洋葱组合（框架内部工具） |
 
@@ -90,6 +90,12 @@ HttpServer.create({ router, serviceName: 'example-service' })
 （CORS 预检、全局鉴权、访问日志都覆盖未命中与方法不符的请求；`Middleware.cors()` 的
 OPTIONS 预检因此能正常短路返回 204，而不是被 405 提前拒掉）。分组中间件与
 `options.middleware` 仍只作用于命中路由。
+
+路径参数的类型越界同样在路由决策处定夺：`{id:int}` / `{v:float}` 只有在 double 能**精确表示**
+URL 里的十进制文本时才转成 number，否则返回 400 `{ "status": "路径参数 id 不是合法的 int" }`
+（经 AppError 出口，故也在全局中间件之后；消息只含参数名与类型，不回显 URL 原文）。
+`/user/007 → 7`、`/f/1.0 → 1` 这类不改变数值的收敛是保留行为；需要原始文本就声明 string 段
+（`/user/{id}`）。
 
 请求体两种来源，**取值写法完全一致**：
 
@@ -396,6 +402,53 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     `http.request` 与 `HttpClient`（`node:https`）都不查这份清单，故产品代码零改动。
     夹具自带 5 例自检（清单成员与端口可用性实测断言、重试时逐个关闭、连续失败明确报错），
     防止它悄悄退化成"看起来在做事的空转"。
+
+25. **路由参数值、通配方法与模板语法的注册期收口**（本次，修复；含两条破坏性变更）：
+    四类"看着能用、实则静默出错"的缺陷，全部先实测复现再修。
+    - **`int` / `float` 路径参数不再塌缩**：`convertParam` 原先无条件 `Number(value)`，于是
+      `/user/99999999999999999999` 与 `/user/99999999999999999998` 都得到同一个 `1e20`
+      （不同 URL → 同一参数值，是鉴权与查库的混淆面），310 位数字得到 `Infinity` 且 `status=hit`。
+      现只在 double 能**精确表示**原文时才转 number，否则 `match` 返回新增的
+      `status: 'badParam'`（附 `badParam: { name, type }`，不回显 URL 原文），由 `HttpServer`
+      经 AppError 出口给出 400 `{ "status": "路径参数 id 不是合法的 int" }`。
+      `/user/007 → 7`、`/f/1.0 → 1` 这类**不改变数值的收敛按保留行为**（判定标准是"无损"，
+      不是"安全整数"：`9007199254740992` 精确放行、`9007199254740993` 被舍入故拒绝）；
+      需要原始文本就声明 string 段（`/user/{id}`）。定夺优先级
+      hit > methodNotAllowed > badParam > notFound，且越界不阻断后续路由命中
+      （`/user/{id:int}` 之后还有 `/user/{id}` 或 `*` 兜底时照常 200）。
+      **破坏性**：自行调用 `router.match()` 的宿主必须处理新状态（其 `target` 为 `null`）。
+    - **`any()` / `map('*')` 展开为标准方法集合**：`methods` 里的 `*` 原先等于"接受任意方法"，
+      405 对通配路由永不触发。现注册期展开为 `HTTP_METHODS`
+      （GET / HEAD / POST / PUT / PATCH / DELETE / OPTIONS / TRACE / CONNECT），
+      非标准动词得到 405 + 具体 `Allow`；`route.methods` 不再含 `*`（`getRoutes()` 可见形状变化）。
+      自定义 / WebDAV 动词请显式注册（`map('PROPFIND', ...)`）。**破坏性**。
+      实测边界：`BLOB` 这类解析器不认的动词在 socket 层就已被 Node 判 400（根本进不到路由），
+      本条实际收紧的是 `PROPFIND` / `MERGE` / `SUBSCRIBE` / `M-SEARCH` 等解析器认识
+      却不属于标准集合的动词；`CONNECT` 由 Node 按隧道请求处理（走 `connect` 事件），
+      任何情况下都不会进入 `request` 分发。
+    - **方法声明注册期校验**：`map('')` / `map('|')` 会注册出永不命中的死路由；
+      `map('GET POST')`、`'GET,POST'`（分隔符写错）被当成**一个**方法名，既不命中，
+      又会在 405 里输出 `Allow: GET POST` 并吞掉本应返回的 404；`'GET|*'` 里的 `*`
+      让前半段形同虚设。现这三种都在注册时抛中文错误（分段两端空白与重复方法仍容错：
+      `' get | post '` → `['GET','POST']`，`'GET|GET'` → `['GET']`，`Allow` 头不再重复）。
+    - **模板语法注册期校验**：`{a-b:int}`、`{id:int}/{id:int}` 原先把名字直接拼进 `(?<name>)`，
+      由 `new RegExp` 抛**英文** `SyntaxError`（启动即崩、看不出是哪条路由、无从改起）；
+      `{v:}`（少写类型名）不匹配占位符模式，被整段当字面量编成 `^\/x\/\{v:\}$` 的路由，
+      注册期零告警、运行期永远 404。现参数名须为标识符、同一条模板内唯一，且不能是
+      `__proto__`（该键无法写入 params）；含配对花括号却没解析成占位块的片段直接抛错；
+      模板与 `@` 模式的正则编译失败统一包成中文错误（原始异常留在 `cause`）。
+      边界保留：块外的 `}` 与"只有 `{` 而无配对 `}`"（`/a{b/x`）仍按路径字面量，
+      `{}` 仍是匿名段（注意 `{int}` 不是匿名段，它是名为 `int` 的 string 段）。
+    - 顺带收口三个同类静默陷阱：`addMatchTypes` 拒绝空片段（`(?<v>)` 会匹配空串）与
+      模板里根本写不出来的类型名（含空格 / `:` / `?` / `}`）；`@` 正则里的
+      `(?<__proto__>…)` 命名组改由 `defineProperty` 落键（原先整段值被原型 setter 吞掉，
+      `params` 为空对象）；`new Router({ routes, types })` 里 `types` 现先于 `routes` 生效
+      （原先 `routes` 引用同批自定义类型会抛"未知的路由类型"）。
+    未变量：404 / 405 响应体形状与 `Allow` 头格式、HEAD→GET、`generate` 反向路由与编码、
+    块外字面量转义、`@` 模式锚定与长度/回溯护栏。
+    后续项（本次未动）：`HttpReq.getQuery` / `getParam` 的 `int` 走同一套 `Number(value)`，
+    存在同类塌缩（`?id=99999999999999999999` → `1e20`）；该模块的语义是"校验不过即抛 400"，
+    收口方式与路由不同，需单独评估。
 
 ## 从旧 API 迁移（宿主改造用）
 

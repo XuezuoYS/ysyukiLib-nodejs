@@ -9,7 +9,7 @@ import { HttpServer } from '#YukiLib/httpServer/server';
 import { HttpRes } from '#YukiLib/httpServer/httpRes';
 import { Middleware } from '#YukiLib/httpServer/middleware';
 import { Router } from '#YukiLib/httpServer/router';
-import { encodeUrlParam } from '#YukiLib/httpServer/router';
+import { encodeUrlParam, HTTP_METHODS } from '#YukiLib/httpServer/router';
 import { ServerLogger } from '#YukiLib/httpServer/serverLogger';
 import { Router as AliasRouter } from '#YukiLib/httpServer';
 
@@ -25,7 +25,7 @@ describe('httpServer 子域入口与子路径导出', () => {
     it('barrel 导出服务端框架成员', () => {
         assert.deepEqual(
             Object.keys(httpServerBarrel).sort(),
-            ['AppError', 'HttpReq', 'HttpRes', 'HttpServer', 'Middleware', 'Router', 'ServerLogger', 'encodeUrlParam'],
+            ['AppError', 'HTTP_METHODS', 'HttpReq', 'HttpRes', 'HttpServer', 'Middleware', 'Router', 'ServerLogger', 'encodeUrlParam'],
         );
     });
 
@@ -38,6 +38,7 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.equal(httpServerBarrel.Router, Router);
         assert.equal(httpServerBarrel.ServerLogger, ServerLogger);
         assert.equal(httpServerBarrel.encodeUrlParam, encodeUrlParam);
+        assert.equal(httpServerBarrel.HTTP_METHODS, HTTP_METHODS);
     });
 
     it('#YukiLib/httpServer 别名与子域 barrel 指向同一实现', () => {
@@ -59,5 +60,10 @@ describe('httpServer 子域入口与子路径导出', () => {
         assert.equal(typeof httpServerBarrel.Middleware.cors, 'function');
         assert.equal(typeof httpServerBarrel.ServerLogger.prototype.access, 'function');
         assert.equal(typeof httpServerBarrel.encodeUrlParam, 'function');
+        // HTTP_METHODS 是 `*` / any() 的展开表：冻结、标准方法集合（与 HTTP 语义耦合，形状需稳定）
+        assert.ok(Object.isFrozen(httpServerBarrel.HTTP_METHODS));
+        assert.deepEqual([...httpServerBarrel.HTTP_METHODS], [
+            'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT',
+        ]);
     });
 });

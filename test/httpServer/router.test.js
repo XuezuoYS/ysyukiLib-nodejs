@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Logger } from '#YukiLib/logger';
-import { Router, encodeUrlParam } from '#YukiLib/httpServer/router';
+import { HTTP_METHODS, Router, encodeUrlParam } from '#YukiLib/httpServer/router';
 
 import { captureStdout } from '../loggerFixture.js';
 
@@ -62,10 +62,10 @@ describe('Router：静态路由与方法匹配', () => {
         assert.equal(router.match('/health', 'HEAD').status, 'hit');
     });
 
-    it('any() 注册的路由接受任意方法', () => {
+    it('any() 注册的路由接受全部标准方法（非标准动词见"方法声明校验与通配展开"）', () => {
         const r = new Router();
         r.any('/x', noop);
-        for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD']) {
+        for (const method of HTTP_METHODS) {
             assert.equal(r.match('/x', method).status, 'hit', method);
         }
     });
@@ -532,5 +532,287 @@ describe('Router：注册期正则护栏与 @ 锚定', () => {
             r.map('GET', '@^/raw/(?<n>[0-9]+)$', noop);
         });
         assert.deepEqual(entries, []);
+    });
+});
+
+describe('Router：int / float 参数的无损转换', () => {
+    const r = new Router();
+    r.get('/user/{uid:int}', noop);
+    r.get('/ratio/{v:float}', noop);
+    r.get('/raw/{uid}', noop);
+
+    it('可精确表示才转 number；007→7、1.0→1 这类不改数值的收敛保留', () => {
+        assert.deepEqual(r.match('/user/12', 'GET').params, { uid: 12 });
+        assert.deepEqual(r.match('/user/007', 'GET').params, { uid: 7 });
+        assert.deepEqual(r.match('/user/0', 'GET').params, { uid: 0 });
+        assert.deepEqual(r.match('/ratio/1.0', 'GET').params, { v: 1 });
+        assert.deepEqual(r.match('/ratio/1.50', 'GET').params, { v: 1.5 });
+        assert.deepEqual(r.match('/ratio/0.0', 'GET').params, { v: 0 });
+        assert.deepEqual(r.match('/ratio/1.5', 'GET').params, { v: 1.5 });
+    });
+
+    it('超出 double 精度的长整数不再塌缩成同一参数值', () => {
+        // 修复前：…99 与 …98 同为 1e20 —— 不同 URL 落成同一 params，构成鉴权/查库混淆面
+        const big = r.match('/user/99999999999999999999', 'GET');
+        const big2 = r.match('/user/99999999999999999998', 'GET');
+        assert.equal(big.status, 'badParam');
+        assert.equal(big2.status, 'badParam');
+        assert.deepEqual(big.badParam, { name: 'uid', type: 'int' });
+        assert.deepEqual(big.params, {});
+        assert.equal(big.target, null);
+        assert.deepEqual(big.middleware, []);
+    });
+
+    it('溢出为 Infinity 的超长数字判越界（修复前 status=hit 且值为 Infinity）', () => {
+        const match = r.match(`/user/${'9'.repeat(310)}`, 'GET');
+        assert.equal(match.status, 'badParam');
+        assert.deepEqual(match.params, {});
+    });
+
+    it('小数位过长被截断同样判越界', () => {
+        assert.equal(r.match('/ratio/1.23456789012345678901', 'GET').status, 'badParam');
+        assert.equal(r.match('/ratio/1.2345678901234567', 'GET').status, 'hit');
+    });
+
+    it('2^53 边界：文本精确的放行，被舍入的拒绝（判据是无损，不是安全整数）', () => {
+        assert.deepEqual(r.match('/user/9007199254740992', 'GET').params, { uid: 9007199254740992 });
+        assert.equal(r.match('/user/9007199254740993', 'GET').status, 'badParam');
+    });
+
+    it('要原始文本就用 string 段：不同 URL 得到不同字符串', () => {
+        assert.deepEqual(r.match('/raw/99999999999999999999', 'GET').params, { uid: '99999999999999999999' });
+        assert.deepEqual(r.match('/raw/007', 'GET').params, { uid: '007' });
+    });
+
+    it('越界不抢命中：后续 string 段与 * 兜底照常命中', () => {
+        const later = new Router();
+        later.get('/user/{id:int}', noop);
+        later.get('/user/{id}', noop);
+        assert.deepEqual(later.match('/user/99999999999999999999', 'GET').params, {
+            id: '99999999999999999999',
+        });
+
+        const catchall = new Router();
+        catchall.get('/user/{id:int}', noop);
+        catchall.map('GET', '*', noop, 'catchall');
+        assert.equal(catchall.match('/user/99999999999999999999', 'GET').name, 'catchall');
+        assert.equal(catchall.match('/user/99999999999999999999', 'GET').status, 'hit');
+    });
+
+    it('定夺优先级：hit > methodNotAllowed > badParam > notFound', () => {
+        const one = new Router();
+        one.get('/user/{id:int}', noop);
+        const wrongMethod = one.match('/user/99999999999999999999', 'POST');
+        assert.equal(wrongMethod.status, 'methodNotAllowed');
+        assert.deepEqual(wrongMethod.allowed, ['GET']);
+        assert.equal(one.match('/user/99999999999999999999', 'GET').status, 'badParam');
+        assert.equal(one.match('/nowhere', 'GET').status, 'notFound');
+    });
+
+    it('每种匹配结果都带 badParam 字段（非越界一律 null）', () => {
+        assert.equal(r.match('/user/5', 'GET').badParam, null);
+        assert.equal(r.match('/user/5', 'DELETE').badParam, null);
+        assert.equal(r.match('/nowhere', 'GET').badParam, null);
+    });
+
+    it('可选段缺席不算越界', () => {
+        const opt = new Router();
+        opt.get('/opt/{page:int?}', noop);
+        assert.equal(opt.match('/opt', 'GET').status, 'hit');
+        assert.deepEqual(opt.match('/opt', 'GET').params, {});
+        assert.equal(opt.match('/opt', 'GET').badParam, null);
+        assert.equal(opt.match('/opt/99999999999999999999', 'GET').status, 'badParam');
+    });
+});
+
+describe('Router：方法声明校验与通配展开', () => {
+    it('any() 展开为标准方法集合，非标准动词得到 405 + 完整 Allow', () => {
+        const r = new Router();
+        r.any('/x', noop);
+        assert.deepEqual(r.getRoutes()[0].methods, [...HTTP_METHODS]);
+        for (const method of HTTP_METHODS) {
+            assert.equal(r.match('/x', method).status, 'hit', method);
+        }
+        for (const method of ['BLOB', 'PROPFIND', 'DELEET']) {
+            const match = r.match('/x', method);
+            assert.equal(match.status, 'methodNotAllowed', `${method} 不应命中 any() 路由`);
+            assert.deepEqual(match.allowed, [...HTTP_METHODS]);
+        }
+    });
+
+    it('注册后的 methods 永不含 *（allowed 与 Allow 头总是具体方法）', () => {
+        const r = new Router();
+        r.any('/a', noop);
+        r.map('GET|POST', '/b', noop);
+        r.map('GET', '*', noop);
+        for (const route of r.getRoutes()) {
+            assert.ok(!route.methods.includes('*'), route.route);
+        }
+    });
+
+    it('自定义动词显式注册仍然可用', () => {
+        const r = new Router();
+        r.map('PROPFIND', '/w', noop, 'webdav');
+        assert.equal(r.match('/w', 'PROPFIND').status, 'hit');
+        assert.equal(r.match('/w', 'GET').status, 'methodNotAllowed');
+    });
+
+    it('空声明、非法 token 与 * 并列都在注册期抛错', () => {
+        /** @type {Array<[string, RegExp]>} */
+        const cases = [
+            ['', /路由方法声明为空/],
+            ['|', /路由方法声明为空/],
+            ['GET POST', /路由方法名不合法/],
+            ['GET,POST', /路由方法名不合法/],
+            ['GET/POST', /路由方法名不合法/],
+            ['GET|*', /不能与其他方法并列/],
+        ];
+        for (const [spec, pattern] of cases) {
+            assert.throws(() => new Router().map(spec, '/x', noop), pattern, spec);
+        }
+    });
+
+    it('方法声明容错：分段两端空白与重复方法', () => {
+        const r = new Router();
+        r.map(' get | post ', '/x', noop);
+        assert.deepEqual(r.getRoutes()[0].methods, ['GET', 'POST']);
+
+        const r2 = new Router();
+        r2.map('GET|GET', '/y', noop);
+        assert.equal(r2.match('/y', 'GET').status, 'hit');
+        assert.deepEqual(r2.match('/y', 'DELETE').allowed, ['GET']);
+    });
+
+    it('HEAD→GET 兜底不回退', () => {
+        const r = new Router();
+        r.get('/g', noop);
+        r.post('/p', noop);
+        assert.equal(r.match('/g', 'HEAD').status, 'hit');
+        assert.equal(r.match('/p', 'HEAD').status, 'methodNotAllowed');
+    });
+});
+
+describe('Router：注册期语法校验的可读报错', () => {
+    /**
+     * 取回调抛出的异常（未抛出即失败）
+     *
+     * @param {() => void} fn 回调
+     * @returns {Error} 抛出的异常
+     */
+    function captureError(fn) {
+        try {
+            fn();
+        } catch (err) {
+            assert.ok(err instanceof Error, '抛出的应是 Error');
+            return err;
+        }
+        assert.fail('预期抛出异常，但实际未抛出');
+    }
+
+    /**
+     * 断言注册期抛的是含路由原文的中文 Error，而不是 new RegExp 的裸英文 SyntaxError
+     *
+     * @param {() => void} fn 注册回调
+     * @param {RegExp} pattern 消息应含的关键字
+     * @param {string} [route] 消息应含的路由原文
+     * @returns {Error} 抛出的异常
+     */
+    function assertRegisterError(fn, pattern, route) {
+        const err = captureError(fn);
+        assert.ok(!(err instanceof SyntaxError), `不应抛裸 SyntaxError：${err.message}`);
+        assert.match(err.message, pattern);
+        if (route !== undefined) {
+            assert.ok(err.message.includes(route), `消息应含路由原文：${err.message}`);
+        }
+        return err;
+    }
+
+    it('非法参数名：中文错误并带路由原文与名字', () => {
+        /** @type {Array<[string, string]>} */
+        const cases = [
+            ['/{a-b:int}', 'a-b'],
+            ['/{1abc:int}', '1abc'],
+            ['/x/{a/b:int}', 'a/b'],
+            ['/x/{a b:int}', 'a b'],
+        ];
+        for (const [route, name] of cases) {
+            const err = assertRegisterError(() => new Router().get(route, noop), /路由参数名不合法/, route);
+            assert.ok(err.message.includes(name), err.message);
+        }
+    });
+
+    it('同一模板内参数名重复（含跨类型）在注册期抛错', () => {
+        assertRegisterError(() => new Router().get('/{id:int}/{id:int}', noop), /路由参数名重复/, '/{id:int}/{id:int}');
+        assertRegisterError(() => new Router().get('/{id:int}/{id:string}', noop), /路由参数名重复/);
+    });
+
+    it('__proto__ 不能作为参数名（该键无法写入 params）', () => {
+        assertRegisterError(() => new Router().get('/p/{__proto__:int}', noop), /__proto__/, '/p/{__proto__:int}');
+    });
+
+    it('{v:} 少写类型名不再静默降级成字面量路由', () => {
+        // 修复前：编译成 ^\/x\/\{v:\}$，注册期零告警、运行期永远 404
+        const err = assertRegisterError(() => new Router().get('/x/{v:}', noop), /缺少类型名/, '/x/{v:}');
+        assert.ok(err.message.includes('{v:}'), err.message);
+    });
+
+    it('其余未解析的花括号片段报占位符语法错误', () => {
+        assertRegisterError(() => new Router().get('/x/{v:int?x}', noop), /占位符语法错误/, '/x/{v:int?x}');
+        assertRegisterError(() => new Router().get('/x/{v:?}', noop), /占位符语法错误/);
+    });
+
+    it('字面量花括号的既有边界保持不变', () => {
+        const r = new Router();
+        r.get('/a{b/x', noop);         // 只有 { 无配对 } → 仍按字面量
+        r.get('/a}b/{id:int}', noop);  // 块外的 } → 仍按字面量
+        r.get('/x/{}', noop);          // 匿名段：参与匹配、不进 params
+        r.get('/y/{int}', noop);       // 不是匿名段：名为 int 的 string 段（类型位需冒号）
+        assert.equal(r.match('/a{b/x', 'GET').status, 'hit');
+        assert.equal(r.match('/a}b/7', 'GET').status, 'hit');
+        assert.deepEqual(r.match('/x/zz', 'GET').params, {});
+        assert.deepEqual(r.match('/y/7', 'GET').params, { int: '7' });
+    });
+
+    it('@ 正则编译失败包成中文错误，原始异常留在 cause', () => {
+        const err = assertRegisterError(() => new Router().map('GET', '@(', noop), /@ 自定义正则编译失败/);
+        assert.ok(err.cause instanceof SyntaxError, 'cause 应保留原始 SyntaxError');
+        const dup = assertRegisterError(
+            () => new Router().map('GET', '@(?<a>x)(?<a>y)', noop),
+            /@ 自定义正则编译失败/,
+        );
+        assert.ok(dup.cause instanceof SyntaxError);
+    });
+
+    it('自定义类型片段本身不是合法正则时，模板编译失败同样包装', () => {
+        const r = new Router({ types: { bad: '(' } });
+        const err = assertRegisterError(() => r.get('/x/{v:bad}', noop), /路由模板编译失败/, '/x/{v:bad}');
+        assert.ok(err.cause instanceof SyntaxError);
+    });
+
+    it('类型表校验：空片段与模板里写不出来的类型名', () => {
+        assert.throws(() => new Router({ types: { e: '' } }), /正则片段为空/);
+        assert.throws(() => new Router().addMatchTypes({ 'bad name': '[0-9]+' }), /类型名不合法/);
+        assert.throws(() => new Router().addMatchTypes({ 'a:b': '[0-9]+' }), /类型名不合法/);
+        // types 传 null / 不传都仍是空操作（与既有写法兼容）
+        assert.doesNotThrow(() => new Router({ types: /** @type {Record<string, string>} */ (/** @type {unknown} */ (null)) }));
+    });
+
+    it('构造参数里的 types 先于 routes 生效', () => {
+        const r = new Router({ routes: [['GET', '/x/{v:d}', noop]], types: { d: '[0-9]+' } });
+        assert.deepEqual(r.match('/x/12', 'GET').params, { v: '12' });
+    });
+
+    it('未知类型错误带上路由原文', () => {
+        assertRegisterError(() => new Router().get('/y/{v:unknownType}', noop), /未知的路由类型/, '/y/{v:unknownType}');
+    });
+
+    it('@ 正则的 (?<__proto__>…) 命名组落到 params 自有键（不再被原型 setter 吞掉）', () => {
+        const r = new Router();
+        r.map('GET', '@^/p/(?<__proto__>[0-9]+)$', noop);
+        const match = r.match('/p/7', 'GET');
+        assert.equal(match.status, 'hit');
+        assert.deepEqual(Object.keys(match.params), ['__proto__']);
+        assert.equal(match.params.__proto__, '7');
+        assert.equal(Object.getPrototypeOf(match.params), Object.prototype);
     });
 });

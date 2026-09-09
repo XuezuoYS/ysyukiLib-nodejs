@@ -23,6 +23,7 @@ import { ServerLogger } from './serverLogger.js';
  *    - 404 未命中：`{name, error: '404 not found', path, method}`；
  *    - 405 方法不符：同形状 `{name, error: '405 method not allowed', path, method}` + `Allow` 头；
  *    - AppError：`{status: message}`，状态码取 `statusCode`；
+ *      路由决策层的"路径命中但 `int` / `float` 参数值超出可精确表示范围"也走这条出口（400）；
  *    - 未捕获异常：记 error 日志（堆栈只进日志），输出 500 `{status: '服务器内部错误'}`；
  *    - 响应已开始后发生异常：只记日志，并 destroy 响应（客户端立即收到连接中断，
  *      不会挂起等待；状态码已无法改动）。
@@ -503,7 +504,9 @@ export class HttpServer {
     /**
      * 路由决策与分发（全局中间件链的末端）
      *
-     * 未命中 → 404；方法不符 → 405（带 `Allow`）；命中 → 分组/路由级中间件 + 处理器。
+     * 未命中 → 404；方法不符 → 405（带 `Allow`）；路径命中但 `int` / `float` 参数值超出
+     * 可精确表示范围 → 400（经 AppError 出口，消息只含参数名与类型，不回显 URL 原文）；
+     * 命中 → 分组/路由级中间件 + 处理器。
      * 404 / 405 也经由本方法写出，因此全局中间件已先行执行（预检、鉴权、访问日志均覆盖）。
      * 处理器执行前会置 `ctx.dispatched = true`，入口据此判定"没写出响应"是真短路还是处理器无输出。
      *
@@ -521,6 +524,14 @@ export class HttpServer {
         if (match.status === 'methodNotAllowed') {
             this.#writeMethodNotAllowed(ctx, match.allowed);
             return;
+        }
+        if (match.status === 'badParam') {
+            // badParam 由路由层保证非空；判空既满足 checkJs 收窄，也兜住手写 RouteMatch 的调用方
+            const bad = match.badParam;
+            throw new AppError(
+                bad === null ? '路径参数非法' : `路径参数 ${bad.name} 不是合法的 ${bad.type}`,
+                400,
+            );
         }
 
         ctx.params = match.params;

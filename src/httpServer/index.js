@@ -5,6 +5,7 @@
  * - HttpServer：服务入口（create / listen / 兜底出口 / 优雅关闭）；
  * - Router：模板路由（`{id}` / `{id:int}`）+ 分组 + 中间件洋葱；
  * - encodeUrlParam：URL 参数编码（反向路由与手工拼 URL 共用）；
+ * - HTTP_METHODS：标准方法集合，`*` / `any()` 在注册期展开成它；
  * - HttpReq：请求侧一行式取值（读当前请求上下文）；
  * - HttpRes：响应侧一行式输出（写当前请求上下文）；
  * - ServerLogger：服务器日志包装（对基础设施 Logger 的 HTTP 场景定制）；
@@ -23,5 +24,5 @@ export { HttpServer } from './server.js';
 export { HttpRes } from './httpRes.js';
 export { Middleware } from './middleware.js';
 export { Router } from './router.js';
-export { encodeUrlParam } from './router.js';
+export { encodeUrlParam, HTTP_METHODS } from './router.js';
 export { ServerLogger } from './serverLogger.js';
