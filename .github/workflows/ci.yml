@@ -1,0 +1,269 @@
+name: CI
+
+# release 分支是本库唯一的发布通道，一次运行做四件事：
+#   1. 三系统矩阵跑既有验收命令（pnpm check / pnpm test），不改一行源码与脚本；
+#   2. pnpm pack → 临时消费者装 tarball，验证「包边界 + exports + 宿主 #YukiLib/* 别名」；
+#   3. 版本门禁：package.json 的 version 严格大于最新 v* tag 时，自动打并推送新 tag；
+#   4. 装完 tag 的真实消费者校验（就是 README「方式二」里给宿主的那几条命令）。
+#
+# 为什么打 tag 与安装校验放在同一个工作流里：由 GITHUB_TOKEN 推送的 tag **不会**触发
+# 新的工作流运行（GitHub 防自激规则），所以不能靠独立的 `on: push: tags:` 来校验；
+# 同一次运行内先推 tag、再当场按该 tag 安装，闭环不依赖二次触发。
+#
+# 手工推送 `v*` tag 不属于受支持流程：请改 package.json 的 version 后推 release 分支。
+
+on:
+  push:
+    branches:
+      - release
+  pull_request:
+    branches:
+      - release
+      - master
+  # 手跑 = 只验不打（version-gate 的 if 条件限定 push 到 release 分支）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # PR 可以互相取消；release 分支的推送排队跑完，避免两个运行在打 tag 上打架
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    # Windows runner 也统一用 Git Bash：避开 pwsh / cmd 的引号与路径分隔符差异
+    shell: bash
+
+jobs:
+  typecheck:
+    name: 静态类型检查（tsc checkJs）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # pnpm 版本由 package.json 的 packageManager 钉死，不走 corepack（已宣布弃用并将移出 Node 内置）
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      # lockfile 与 package.json 漂移在这里直接红：共用库不接受"本地能装、CI 装出别的版本"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  test:
+    name: 单元测试（${{ matrix.os }} / node ${{ matrix.node }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['24']
+        # 前瞻格：engines 写的是 >= 24，这里探一下上界；Node 26 目前非 LTS，随时可删
+        include:
+          - os: ubuntu-latest
+            node: '26'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # 与 AGENTS.md 验收命令逐字一致（用例对时序敏感，宁可这里红，也不在 CI 里换一套跑法）
+      - run: pnpm test
+
+  pack-smoke:
+    name: 打包与安装冒烟（tarball · ${{ matrix.os }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # 这里故意不装依赖：pnpm pack 与消费者安装都不需要 devDependencies，省一半时间
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: 打包并校验包内清单
+        id: pack
+        run: |
+          set -euo pipefail
+          rm -rf yuki-smoke-tmp
+          mkdir -p yuki-smoke-tmp
+          version="$(node -e 'process.stdout.write(require("./package.json").version)')"
+          pnpm pack --pack-destination yuki-smoke-tmp
+          tarball="$(ls -1 yuki-smoke-tmp/*.tgz | head -n 1 || true)"
+          test -n "$tarball" && test -f "$tarball"
+
+          tar -tzf "$tarball" | sort > yuki-smoke-tmp/contents.txt
+          echo "── 包内文件（$tarball）──"
+          cat yuki-smoke-tmp/contents.txt
+
+          # 该有的必须在：入口与被 exports 引用的源码
+          grep -qx 'package/src/index.js' yuki-smoke-tmp/contents.txt || {
+            echo "::error::包内缺少 src/index.js，检查 package.json 的 files 字段"; exit 1; }
+          grep -qx 'package/package.json' yuki-smoke-tmp/contents.txt || {
+            echo "::error::包内缺少 package.json"; exit 1; }
+
+          # 不该有的不能出现：测试、CI 夹具、宿主配置与运行期产物
+          forbidden='^package/(test|ci|node_modules|log|\.github|\.git)/|^package/(\.env|dev\.config\.json|AGENTS\.md|jsconfig\.json|pnpm-lock\.yaml)$'
+          if grep -qE "$forbidden" yuki-smoke-tmp/contents.txt; then
+            echo "::error::包里混进了不该发布的文件，见上方清单"
+            grep -E "$forbidden" yuki-smoke-tmp/contents.txt
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tarball=$(basename "$tarball")" >> "$GITHUB_OUTPUT"
+
+      - name: "临时消费者按 file: 安装并跑冒烟"
+        env:
+          TARBALL_NAME: ${{ steps.pack.outputs.tarball }}
+          EXPECT_VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          consumer="yuki-smoke-tmp/consumer"
+          mkdir -p "$consumer"
+          cp ci/consumer/package.json ci/consumer/smoke.mjs "$consumer/"
+          cd "$consumer"
+          # file:../<name>.tgz —— 与本地实测过的安装串一致（消费者目录就在 yuki-smoke-tmp 下）
+          pnpm add "file:../$TARBALL_NAME"
+          node smoke.mjs --source tarball --expect-version "$EXPECT_VERSION"
+
+  version-gate:
+    name: 版本门禁与自动打 tag
+    needs: [typecheck, test, pack-smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      created: ${{ steps.decide.outputs.created }}
+      tag: ${{ steps.decide.outputs.tag }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 要按 tag 判版本大小，完整历史与全部 tag 都得拿到（仓库很小，成本可忽略）
+          fetch-depth: 0
+
+      - name: 比较当前版本与最新 tag
+        id: decide
+        run: |
+          set -euo pipefail
+          version="$(node -e 'process.stdout.write(require("./package.json").version)')"
+          latest="$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)"
+          # 等号形式：无 tag 时 latest 为空串，空格形式会被当成漏传参数
+          node ci/nextTag.mjs \
+            --package-version="$version" \
+            --latest-tag="$latest" \
+            --github-output="$GITHUB_OUTPUT" \
+            --summary="$GITHUB_STEP_SUMMARY"
+
+      - name: 推送新 tag
+        if: steps.decide.outputs.created == 'true'
+        run: |
+          set -euo pipefail
+          tag='${{ steps.decide.outputs.tag }}'
+          git tag "$tag"
+          git push origin "refs/tags/$tag"
+          echo "已推送 ${tag}（指向 ${{ github.sha }}）"
+
+  install-from-tag:
+    name: git URL 安装冒烟（${{ matrix.os }} · ${{ matrix.mode }}）
+    needs: [version-gate]
+    if: needs.version-gate.outputs.created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        mode: [shorthand, tokenized-url, semver-range]
+        # 三种写法只在 ubuntu 全覆盖；windows 只验 README 首推的那一条
+        exclude:
+          - os: windows-latest
+            mode: tokenized-url
+          - os: windows-latest
+            mode: semver-range
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: 按 ${{ matrix.mode }} 安装 ${{ needs.version-gate.outputs.tag }} 并跑冒烟
+        env:
+          GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version-gate.outputs.tag }}
+          VERSION: ${{ needs.version-gate.outputs.version }}
+          REPO: ${{ github.repository }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          consumer="yuki-git-smoke-tmp/consumer"
+          rm -rf yuki-git-smoke-tmp
+          mkdir -p "$consumer"
+          cp ci/consumer/package.json ci/consumer/smoke.mjs "$consumer/"
+
+          # 私有仓库也能装：GITHUB_TOKEN 带 contents:read，注入 URL 即可，不需要 PAT。
+          # shorthand 走 https://github.com/ 前缀改写，让 `github:owner/repo` 这种写法复用同一令牌。
+          github_auth_rewrite() {
+            git config --global "url.https://x-access-token:${GIT_TOKEN}@github.com/.insteadOf" "https://github.com/"
+          }
+
+          case "$MODE" in
+            # 与 README「方式二」第一条命令逐字一致：owner/repo 简写 + #tag
+            shorthand)
+              github_auth_rewrite
+              SPEC="github:${REPO}#${TAG}"
+              ;;
+            # 显式 git+https 全写（不依赖简写解析，最接近裸 git 的形态）
+            tokenized-url)
+              SPEC="git+https://x-access-token:${GIT_TOKEN}@github.com/${REPO}.git#${TAG}"
+              ;;
+            # 语义化范围：靠 tag 名解析，pnpm 对 git 依赖有解析缓存，用 --force 现算
+            semver-range)
+              github_auth_rewrite
+              SPEC="github:${REPO}#semver:^${VERSION}"
+              ADD_ARGS='--force'
+              ;;
+            *) echo "::error::未知 mode: $MODE"; exit 1 ;;
+          esac
+
+          echo "安装目标：${SPEC}"
+
+          # tag 刚推上去，git 侧不一定立刻对令牌读取生效；退避重试几轮
+          installed=0
+          for attempt in 1 2 3 4 5; do
+            if (cd "$consumer" && pnpm add ${ADD_ARGS:-} "$SPEC"); then
+              installed=1
+              break
+            fi
+            echo "第 ${attempt} 次安装失败，稍后重试"
+            sleep "$((attempt * 3))"
+          done
+          if [ "$installed" != 1 ]; then
+            echo "::error::无法从 ${SPEC} 安装，检查 tag 是否已推送、仓库权限是否可读取"
+            exit 1
+          fi
+
+          cd "$consumer"
+          node smoke.mjs --source git-url --expect-version "$VERSION" --spec "$SPEC"

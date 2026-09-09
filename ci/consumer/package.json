@@ -1,0 +1,9 @@
+{
+  "name": "yuki-install-smoke-consumer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#YukiLib/*": "ysyuki-lib-on-nodejs/*"
+  }
+}

@@ -27,7 +27,12 @@ src/
     middleware.js           Middleware：cors / accessLog / requestId（opt-in）
 ```
 
-`test/` 与 `src/` 同构镜像。
+`test/` 与 `src/` 同构镜像。仓库根另有：
+
+```
+.github/workflows/ci.yml   CI：三系统验收 → 打包安装冒烟 → 版本门禁自动打 tag → git URL 安装冒烟
+ci/                        CI 夹具（不进包）：consumer/ 临时宿主与安装态冒烟脚本、nextTag.mjs 版本门禁
+```
 
 ## 模块
 
@@ -142,22 +147,76 @@ const page = HttpReq.getQuery('page', 'int', 1);    // number；缺省值优先�
 
 ## 接入
 
-### 方式一：本地目录依赖（推荐，未发布时）
+两条路径：**同机联调用本地引用，正式项目按 tag 从 git 仓库安装**。
+两者的引用写法完全一致（见本节末尾），换方式不用改一行业务代码。
 
-宿主项目 `package.json`：
+### 方式一：本地引用（未打 tag / 同机联调）
+
+宿主项目 `package.json` 把库目录作为 `link:` 依赖：
 
 ```json
 {
   "dependencies": {
     "ysyuki-lib-on-nodejs": "link:../ysyukiLib-nodejs"
-  },
+  }
+}
+```
+
+改库立即生效，无需重装。若宿主与库同属一个 pnpm workspace，把这条依赖改写成
+`"ysyuki-lib-on-nodejs": "workspace:*"` 即可，其余一致。
+
+### 方式二：pnpm 按 tag 从 git 仓库安装（正式项目）
+
+```
+pnpm add github:XuezuoYS/ysyukiLib-nodejs#v0.1.0
+```
+
+等价的另外两种写法（完整 git URL / 由 tag 解析的版本号范围）：
+
+```
+pnpm add git+https://github.com/XuezuoYS/ysyukiLib-nodejs.git#v0.1.0
+pnpm add github:XuezuoYS/ysyukiLib-nodejs#semver:^0.1.0
+```
+
+私有仓库需要读取权限，令牌注入 URL 即可（CI 里用 `GITHUB_TOKEN`，不需要 PAT）：
+
+```
+pnpm add git+https://<token>@github.com/XuezuoYS/ysyukiLib-nodejs.git#v0.1.0
+```
+
+约定：
+
+- `#` 后必须跟 tag（或 `#semver:` 范围）；不写就退化成默认分支，版本不可复现，别这么用；
+- 本库零第三方运行时依赖、纯 JS 无构建链，装 git 依赖不需要 `prepare` 编译；
+- 锁文件会记下 tag 对应的具体 commit，重装复现同一份源码；
+- 版本号从哪来见下一小节；日后若发布到 npm，只把安装串换成包名，其余不变。
+
+### tag 怎么来：推 `release` 分支即发布通道
+
+推送到 `release` 分支后，CI（`.github/workflows/ci.yml`）依次做四件事：
+
+1. ubuntu / windows / macos 三系统跑 `pnpm test`（外加一格 ubuntu + Node 26 探 `engines` 上界），
+   `pnpm check` 在 ubuntu 上跑一次（tsc 与操作系统无关）；
+2. `pnpm pack` 装进一个临时宿主（ubuntu + windows），校验包边界、`exports` 与宿主侧 `#YukiLib/*` 别名；
+3. **版本门禁**：`package.json` 的 `version` 严格大于最新 `v*` tag 时，自动打并推送
+   `v<version>`（相等则跳过；低于则红——`release` 不允许版本回退）；
+4. 用上一节那三条命令**真实安装一次刚推上去的 tag** 并跑冒烟。
+
+所以一个 tag 的含义就是"三系统验证过、装得上、用得了"。要发新版：改 `version` → 推 `release`；
+**不要手工打 tag**（手工 tag 不在这条流水线的校验范围内）。
+
+### 两种方式通用的引用写法
+
+宿主 `package.json` 里加一条 `imports` 映射，即可沿用统一的 `#YukiLib/*` 写法
+（模块路径与库内目录同构）：
+
+```json
+{
   "imports": {
     "#YukiLib/*": "ysyuki-lib-on-nodejs/*"
   }
 }
 ```
-
-`imports` 映射让宿主项目沿用统一的 `#YukiLib/*` 写法（模块路径与库内目录同构）：
 
 ```js
 import { Config } from '#YukiLib/config';
@@ -172,14 +231,8 @@ import { Config, Logger, Router } from 'ysyuki-lib-on-nodejs';
 import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 ```
 
-### 方式二：pnpm workspace
-
-把库与各项目放进同一 workspace 根，依赖写 `"ysyuki-lib-on-nodejs": "workspace:*"`。
-
-### 方式三：发布
-
-本包已可直接发布：`private: false`、`exports` 已按子路径就绪、`files` 只收 `src`；
-发布前确认 `version` 与 `repository` 指向的仓库一致即可。
+> `#YukiLib/*` 由**宿主自己的** `imports` 提供（`imports` 是包内私有的，库无法替宿主声明）；
+> 不配这条映射就用包名写法，两者指向同一实现。
 
 ## 宿主根（项目根）解析
 
@@ -527,6 +580,9 @@ HttpClient.caFilePath = '/etc/ssl/private-ca.pem';  // 下次 HTTPS 请求即生
 pnpm check    # tsc 静态类型检查，exit 0
 pnpm test     # node:test 全量
 ```
+
+这两条就是 CI 门禁逐字执行的命令（不在 CI 里另换一套跑法）；在此之上 CI 还额外跑
+打包/安装态冒烟，见「接入 → tag 怎么来」。
 
 发布前守门：`prepublishOnly` 会在 `npm publish` 时自动跑 `npm run check && npm run test`
 （`npm publish --dry-run` 同样触发），任一失败即中止发布。它**不**在 `npm install`

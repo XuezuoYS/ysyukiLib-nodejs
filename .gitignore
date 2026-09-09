@@ -3,3 +3,7 @@ dev.config.json
 log/
 node_modules/
 .pnpm-store/
+
+# CI 安装冒烟的临时目录（CI 里同名，跑在一次性 runner 上；本地复现时用）
+yuki-smoke-tmp/
+yuki-git-smoke-tmp/
