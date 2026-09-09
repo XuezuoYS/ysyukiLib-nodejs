@@ -209,6 +209,11 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
   互不影响，也不影响根 `Logger`；`ServerLogger` 同样按实例隔离（服务名 + 等级）。
 - 等级为**阈值**语义：`warn` 记 warn+error，`info` 记全部，`error` 只记 error；
   未显式设置时跟随 `Logger.defaultLevel`。
+- **记录日志不抛错**：`fields` 里的循环引用 / `BigInt` / 抛错的 getter 与 `toJSON` 会降级成
+  `[Circular]` / `[BigInt 10]` / `[Getter threw]` 等标记（仍是合法 JSON），stdout 与文件两通道
+  各自独立失败——Logger 常是 `catch` / `onError` 的兜底路径，不能反过来炸宿主。
+- 文件滚动状态是**「日期 + 目录」两者**：跨日、当日重设 `Logger.logDir`、`Config.setRootDir()`
+  换宿主根，都会在下一写建好目标目录并清理；目录运行期被外部删除也会在下一次写入补建重试。
 
 ```js
 import { Logger } from '#YukiLib/logger';
@@ -359,6 +364,25 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     `EISDIR`，路径本就由 `file` 字段单独给出）、解析失败记固定的 `SyntaxError` 类别说明、
     顶层非对象记 `typeof`（不记值本身）。告警文案、去重语义与 `getConfig` 返回值均未变化。
     需要精确行列时请在受控终端里自行复现一次 `JSON.parse`，不要让库把配置内容写进共享日志。
+
+23. **Logger 兜底路径不再炸宿主**（本次，修复）：两处实测缺陷。
+    - **`fields` 序列化无保护**：`Logger.error('x', {peer: 循环引用})` 与 `{n: 10n}` 直接抛
+      `TypeError`（`Converting circular structure to JSON` / `Do not know how to serialize a BigInt`），
+      且因为序列化发生在写通道之前，**整条日志一行都没落**（stdout 与文件皆无）。Logger 正是
+      `catch` / `onError` 的兜底路径，"记一条日志"变成炸宿主。现在快路径仍是原生 `JSON.stringify`
+      （正常字段的输出逐字节不变），仅当它抛错时退到安全编码器：循环引用按**祖先链**判定
+      （兄弟节点重复引用同一对象不会被误伤）→ `"[Circular]"`、`"[BigInt 10]"`、超 10 层
+      `"[Truncated]"`、`toJSON` / getter 抛错 → `"[ToJSON threw]"` / `"[Getter threw]"`，
+      输出恒为合法 JSON；字段改为逐键读取（原 `Object.entries` 会调 getter，一个坏 getter
+      就连累其余好字段全丢）；连一行都构造不出来时退化为只含时间/等级/消息的兜底行。
+      `Logger.now` 抛错或返回非法 `Date` 也退回真实时钟（否则写出 `NaN-NaN-NaN` 时间戳）。
+    - **只在跨天首写建目录**：`Logger.logDir = 新目录` 后（日期未变）新目录永不被创建，
+      往不存在的目录追加失败又被静默吞掉，**文件通道丢日志直到次日**（实测新目录不存在，
+      而预先建好的目录正常写入）。滚动状态由此扩为「日期 + 目录」，`Config.setRootDir()`
+      换宿主根（默认目录随之变化）同样覆盖；追加报缺目录时补建目录重试一次，覆盖运行期
+      目录被外部删除的情形。清理改按刚写入的那个目录执行，且单个旧文件删不掉
+      （Windows 常见 `EBUSY`）时跳过，不再打断滚动状态推进。
+    公共 API、行格式与等级/目录配置语义均未变化（`Logger.cleanup()` 签名不变）。
 
 ## 从旧 API 迁移（宿主改造用）
 
