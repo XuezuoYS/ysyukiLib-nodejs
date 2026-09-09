@@ -510,7 +510,7 @@ describe('HttpServer：兜底分支', () => {
         );
         assert.deepEqual(await miss.json(), {
             name: SERVICE_NAME,
-            error: '405 method not allowed',
+            status: '405 method not allowed',
             path: '/x',
             method: 'PROPFIND',
         });
