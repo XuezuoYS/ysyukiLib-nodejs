@@ -36,7 +36,23 @@
 ## 注释风格
 
 JSDoc + `jsconfig.json` 的 `checkJs`（等价于全库 `// @ts-check`）语义；
-参考 `src/config.js` 顶部模块注释与各方法注释的写法。
+
+风格参考：
+
+```js
+/**
+ * 函数描述
+ *
+ * @default paramA, paramB = 'some text', paramI = 123
+ * @param {string} paramA paramA的描述
+ * @param {string} [paramB] paramB的描述
+ * @param {number} [paramI] paramI的描述
+ * @returns {any} 返回值描述
+ */
+function aFunction(paramA, paramB = 'some text', paramI = 123) {}
+```
+
+注意：应在全部 @param 前写一行式 @default 可包含多个（或全部）赋值
 
 ## 验收
 
