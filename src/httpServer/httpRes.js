@@ -2,7 +2,7 @@ import { AppError } from './appError.js';
 import { getCurrentContext } from './context.js';
 
 /**
- * 响应侧一行式输出门面（静态，写当前请求上下文）
+ * @fileoverview 响应侧一行式输出门面（静态，写当前请求上下文）
  *
  * 全项目所有响应都经本门面写出，体输出等价 PHP
  * `json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)`（契约）。
@@ -155,6 +155,18 @@ function normalizeSameSite(sameSite) {
     return normalized;
 }
 
+/**
+ * 响应输出门面（全静态方法，写当前请求上下文）
+ *
+ * 契约摘要：全项目响应都经本门面写出，体输出等价 PHP
+ * `json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)`；
+ * 响应修饰（header / cookie / status）必须在写出响应之前调用；
+ * 无响应体形态（`jsonRes(null)` / `fastResEmpty` / `fastResRedirect`）不设 Content-Type、不写响应体。
+ *
+ * 完整约定（状态日志分级、HEAD 一致性、省略 data 与显式 null 的区别）见本文件顶部 `@fileoverview`。
+ *
+ * 常用入口：jsonRes / fastResEmpty / fastResRedirect / fastResError / header / cookie / status
+ */
 export class HttpRes {
     /**
      * 返回 JSON 数据（统一出口）

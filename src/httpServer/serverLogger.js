@@ -3,7 +3,7 @@ import { STATUS_CODES } from 'node:http';
 import { Logger } from '../logger.js';
 
 /**
- * 服务器日志（对基础设施 Logger 的 HTTP 场景定制）
+ * @fileoverview 服务器日志（对基础设施 Logger 的 HTTP 场景定制）
  *
  * Logger 属基础设施（`src/logger.js`），负责 stdout + 文件双通道、等级阈值与日期源；
  * ServerLogger 不重复实现落盘，只在 Logger 之上补齐服务器关心的四件事：
@@ -18,18 +18,6 @@ import { Logger } from '../logger.js';
  * （warn 记 warn+error、info 记全部、error 只记 error）；未显式设置时实时跟随
  * `Logger.defaultLevel`（开发环境 info，否则 warn）。日期源只有 `Logger.now` 一个入口。
  *
- * @typedef {object} ServerLoggerOptions
- * @property {string} [serviceName] 服务名（进入所有日志字段；空串则不输出该字段）
- * @property {'info'|'warn'|'error'} [options.level] 记录等级；省略时跟随 Logger.defaultLevel
- *
- * @typedef {object} ServerLoggerRequestLog
- * @property {(message: string, fields?: Record<string, any>) => void} info 一般信息
- * @property {(message: string, fields?: Record<string, any>) => void} warn 警告
- * @property {(message: string, fields?: Record<string, any>) => void} error 错误
- * @property {(statusCode: number, durationMs: number) => void} access 访问日志（响应结束时调用）
- * @property {(statusCode: number) => void} response 响应状态日志（响应写出后调用；
- *   1/2/3 → INFO、4/5 → WARN，其它前缀不记）
- *
  * 常用函数：
  * - new ServerLogger({ serviceName, level })：每个 HttpServer 实例持有一个
  * - logger.request(ctx)：请求级日志
@@ -37,7 +25,32 @@ import { Logger } from '../logger.js';
  * - logger.response(ctx, statusCode)：响应状态日志（按状态码分级）
  * - logger.startup(host, port) / logger.shutdown(signal, durationMs)
  * - logger.error(message, err, fields)：带堆栈的错误日志
+ */
+
+/**
+ * @typedef {object} ServerLoggerOptions 服务器日志构造选项
+ * @property {string} [serviceName] 服务名（进入所有日志字段；空串则不输出该字段）
+ * @property {'info'|'warn'|'error'} [options.level] 记录等级；省略时跟随 Logger.defaultLevel
  *
+ * @typedef {object} ServerLoggerRequestLog 请求级日志（`ServerLogger#request` 的返回值）
+ * @property {(message: string, fields?: Record<string, any>) => void} info 一般信息
+ * @property {(message: string, fields?: Record<string, any>) => void} warn 警告
+ * @property {(message: string, fields?: Record<string, any>) => void} error 错误
+ * @property {(statusCode: number, durationMs: number) => void} access 访问日志（响应结束时调用）
+ * @property {(statusCode: number) => void} response 响应状态日志（响应写出后调用；
+ *   1/2/3 → INFO、4/5 → WARN，其它前缀不记）
+ */
+
+/**
+ * 服务器日志器（每个 HttpServer 实例持有一个，服务名与等级随实例）
+ *
+ * 契约摘要：只补齐 HTTP 场景的记法，落盘与等级阈值一律委托基础设施 Logger；
+ * 实例之间的服务名与等级互不影响，也不影响根 Logger；未显式设置等级时实时跟随
+ * `Logger.defaultLevel`；日期源只有 `Logger.now` 一个入口。
+ *
+ * 完整约定（四类日志各自的字段与分级）见本文件顶部 `@fileoverview`。
+ *
+ * 常用入口：request / access / response / startup / shutdown / error
  */
 export class ServerLogger {
     /**

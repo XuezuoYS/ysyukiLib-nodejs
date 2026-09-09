@@ -16,7 +16,7 @@ import { Config } from './config.js';
  */
 
 /**
- * HTTP 客户端类（node:http / node:https 自研封装，不引第三方）
+ * @fileoverview HTTP 客户端类（node:http / node:https 自研封装，不引第三方）
  *
  * AI 注意：此模块与 `httpServer` 非对称，禁止理解为对称功能。
  *
@@ -359,6 +359,18 @@ function requestOnce(method, target, headers, body, signal) {
     });
 }
 
+/**
+ * HTTP 客户端（node:http / node:https 自研封装，实例化调用）
+ *
+ * 契约摘要：`requireHttp(method, url, headers, data)` 返回 `{ status, headers, body, rawInfo }`；
+ * 失败一律抛 `HTTP Request Failed: <原因>`（原始异常留在 `cause`）；3xx 自动重定向，
+ * 且只跟随 `allowedRedirectProtocols` 白名单内的协议；每次请求用本次私有的头集合，
+ * 实例累积头只作默认值（同实例并发请求互不污染）。
+ *
+ * 完整约定（超时、自定义 CA、响应体上限、SSL 校验）见本文件顶部 `@fileoverview` 与 README。
+ *
+ * 常用入口：requireHttp / get / post / put / delete / headerAdd / clearHeader / closeAgents
+ */
 export class HttpClient {
     /**
      * 最近一次请求的 URL（实例状态，便于排障时查看）

@@ -9,7 +9,7 @@ import { compose } from './onion.js';
 import { ServerLogger } from './serverLogger.js';
 
 /**
- * 入站 HTTP 服务入口（轻量框架的装配层）
+ * @fileoverview 入站 HTTP 服务入口（轻量框架的装配层）
  *
  * 职责：
  * 1. 建立请求上下文（AsyncLocalStorage），使 HttpReq / HttpRes 一行式可用；
@@ -41,8 +41,10 @@ import { ServerLogger } from './serverLogger.js';
  * - 中间件 `(ctx, next) => any`：`await next()` 前后分别为请求前后处理。
  *
  * HEAD 请求：命中 GET 路由，响应头照常写出、响应体自动抑制。
- *
- * @typedef {object} HttpServerOptions
+ */
+
+/**
+ * @typedef {object} HttpServerOptions 服务装配选项（`HttpServer.create` 入参）
  * @property {import('./router.js').Router} router 路由器（必填）
  * @property {string} [serviceName] 服务名（404/405 响应体 name 字段与日志字段）
  * @property {string} [host] 默认监听地址
@@ -188,6 +190,18 @@ function isFormContentType(contentType) {
     return mime === 'application/x-www-form-urlencoded';
 }
 
+/**
+ * 入站 HTTP 服务（装配层：上下文 → 请求体 → 中间件洋葱 → 路由 → 唯一兜底出口）
+ *
+ * 契约摘要：全局中间件**先于**路由决策执行（404 / 405 也经过它）；处理器返回非 undefined
+ * 即自动经 `HttpRes.jsonRes` 序列化为 JSON 200；异常一律走唯一兜底出口
+ * （AppError 按 `statusCode` 输出，未捕获异常记日志后输出 500，响应已开始时只记日志并 destroy）；
+ * 优雅关闭由进程级共享信号注册表处理，`exitOnShutdown` 默认 false（交回宿主）。
+ *
+ * 完整约定（请求体解析、五条兜底分支、超时与优雅关闭）见本文件顶部 `@fileoverview` 与 docs/httpServer.md。
+ *
+ * 常用入口：create / listen / close / port / logger
+ */
 export class HttpServer {
     /**
      * 选项（已归一化）

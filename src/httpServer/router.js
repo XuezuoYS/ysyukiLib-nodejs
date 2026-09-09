@@ -1,7 +1,7 @@
 import { Logger } from '../logger.js';
 
 /**
- * 自研薄路由（FastAPI 风格模板，无第三方依赖）
+ * @fileoverview 自研薄路由（FastAPI 风格模板，无第三方依赖）
  *
  * 模板语法（路径段占位符）：
  * - `{name}`：默认字符串段（不含斜杠）；
@@ -50,10 +50,12 @@ import { Logger } from '../logger.js';
  *
  * 中间件：`use(...)` 注册全局中间件（分发时组合）；在 `group()` 内注册的中间件
  * 绑定到该分组后续注册的路由；`options.middleware` 绑定单条路由。
- *
- * @typedef {(ctx: any, next: () => Promise<void>) => any} RouteMiddleware
- * @typedef {{name?: string|null, middleware?: RouteMiddleware[]}} RouteOptions
- * @typedef {object} RouteEntry
+ */
+
+/**
+ * @typedef {(ctx: any, next: () => Promise<void>) => any} RouteMiddleware 路由中间件函数
+ * @typedef {{name?: string|null, middleware?: RouteMiddleware[]}} RouteOptions 单条路由的注册选项
+ * @typedef {object} RouteEntry 已注册路由条目
  * @property {string[]} methods 允许的方法（`*` / `any()` 已在注册期展开为 `HTTP_METHODS`，故永不含 `*`）
  * @property {string} route 注册时的路由模式
  * @property {Function} target 处理器
@@ -62,7 +64,7 @@ import { Logger } from '../logger.js';
  * @property {Record<string, string>} paramTypes 各路径参数的类型
  * @property {RouteMiddleware[]} middleware 该路由绑定的中间件
  * @typedef {{name: string, type: string}} BadParam 命中但超出类型可精确表示范围的路径参数
- * @typedef {{status: 'hit'|'methodNotAllowed'|'badParam'|'notFound', target: Function|null, params: Record<string, string|number|boolean>, name: string|null, allowed: string[], badParam: BadParam|null, middleware: RouteMiddleware[]}} RouteMatch
+ * @typedef {{status: 'hit'|'methodNotAllowed'|'badParam'|'notFound', target: Function|null, params: Record<string, string|number|boolean>, name: string|null, allowed: string[], badParam: BadParam|null, middleware: RouteMiddleware[]}} RouteMatch `match` 的匹配结果（status 四态；allowed 供 405 用）
  * @typedef {{params: Record<string, string|number|boolean>, badParam: BadParam|null}} SegmentMatch 单条路由的路径匹配结果
  */
 
@@ -348,6 +350,17 @@ function anchorPattern(source) {
     return `${source.startsWith('^') ? '' : '^'}${source}${source.endsWith('$') ? '' : '$'}`;
 }
 
+/**
+ * 路由表（注册、匹配与反向生成）
+ *
+ * 契约摘要：匹配按注册顺序、先注册先命中；`match` 返回 `status` 为
+ * hit / methodNotAllowed / badParam / notFound 的匹配结果；路径命中而方法不符时给出 `allowed`（405 用）；
+ * `int` / `float` 段仅在结果能精确表示该十进制文本时才转 number，否则判为 badParam。
+ *
+ * 完整约定（模板语法、注册期语法与正则护栏、安全红线、中间件绑定）见本文件顶部 `@fileoverview` 与 docs/httpServer.md。
+ *
+ * 常用入口：get / post / put / patch / delete / map / any / use / group / match / generate / addMatchTypes
+ */
 export class Router {
     /**
      * 全部路由

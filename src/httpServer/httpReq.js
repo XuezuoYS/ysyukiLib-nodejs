@@ -2,7 +2,7 @@ import { AppError } from './appError.js';
 import { getCurrentContext } from './context.js';
 
 /**
- * 请求侧一行式取值门面（静态，读当前请求上下文）
+ * @fileoverview 请求侧一行式取值门面（静态，读当前请求上下文）
  *
  * 一行式：`HttpReq.getPostData('key', 'int', 0)`；
  * 字段不存在（或值为 null）时：显式传入默认值则返回默认值，否则抛
@@ -42,7 +42,18 @@ import { getCurrentContext } from './context.js';
  * - getParam(name, type, default?)：路径参数取值
  * - getHeader(name, type, default?) / getCookie(name, type, default?) / getIp()
  * - getRawBody() / getBody() / getMethod() / getPath() / getRequestId() / current()
+ */
+
+/**
+ * 请求侧取值门面（全静态方法，读当前请求上下文）
  *
+ * 契约摘要：一行式 `HttpReq.getPostData('key', 'int', 0)`；字段不存在（或值为 null）时——
+ * 显式传入默认值则返回默认值，否则抛 AppError(400, '参数错误')；
+ * 字段存在但类型不符时始终抛错（默认值不生效）；声明了 type 的取值一律返回该类型。
+ *
+ * 完整约定（类型语义、字符串来源强转、表单体与 JSON 体的差异）见本文件顶部 `@fileoverview` 与 docs/httpServer.md。
+ *
+ * 常用入口：getPostData / getQuery / getParam / getHeader / getCookie / getIp / getRawBody / getBody / getMethod / getPath / getRequestId
  */
 export class HttpReq {
     /**

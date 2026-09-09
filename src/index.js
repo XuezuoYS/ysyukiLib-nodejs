@@ -1,5 +1,5 @@
 /**
- * 包入口（barrel）
+ * @fileoverview 包入口（barrel）
  *
  * 对外唯一聚合入口：`import { Config, Logger } from 'ysyuki-lib-on-nodejs'`
  * 等价于逐个从子路径导入（同一实现，类对象同一）。

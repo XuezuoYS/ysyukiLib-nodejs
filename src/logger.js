@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Config } from './config.js';
 
 /**
- * 自研结构化日志（stdout + 宿主项目内 log/ 文件双通道，不引第三方）
+ * @fileoverview 自研结构化日志（stdout + 宿主项目内 log/ 文件双通道，不引第三方）
  *
  * 行格式（IDE/日志查看器友好，\t 分隔三段或四段）：
  * `ISO时间(本地时区)\tLEVEL(大写定宽5)\t消息[\t附加字段JSON]`
@@ -592,6 +592,16 @@ export class SubLogger {
     }
 }
 
+/**
+ * 结构化日志入口（根 logger，全静态方法）：stdout + 宿主根 log/ 双通道
+ *
+ * 契约摘要：记录日志**永不抛错**（序列化与写通道全程受保护）；等级为阈值语义
+ * （info 全部、warn 记 warn+error、error 只记 error）；等级与目录的配置分层见文件顶部说明。
+ *
+ * 完整约定（行格式、配置分层、文件落盘与滚动、默认等级求值）见本文件顶部 `@fileoverview` 与 README。
+ *
+ * 常用入口：create / info / warn / error / now / logDir / defaultLevel / cleanup
+ */
 export class Logger {
     /**
      * 时间源（测试可注入固定时钟以驱动跨日滚动）

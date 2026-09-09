@@ -1,5 +1,5 @@
 /**
- * 入站 HTTP 服务端子域入口（barrel）
+ * @fileoverview 入站 HTTP 服务端子域入口（barrel）
  *
  * 轻量 FastAPI 风格服务端框架：
  * - HttpServer：服务入口（create / listen / 兜底出口 / 优雅关闭）；

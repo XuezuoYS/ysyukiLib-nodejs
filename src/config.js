@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { Logger } from './logger.js';
 
 /**
- * 读取配置功能库
+ * @fileoverview 读取配置功能库
  *
  * 使用 Config.getEnv(key) 获取环境变量（系统环境 + `.env` 文件，系统环境优先）
  *
@@ -194,6 +194,17 @@ function detectRootFromEntry(entry) {
     }
 }
 
+/**
+ * 配置读取入口（全静态方法，无实例）
+ *
+ * 契约摘要：取值失败一律返回 false 且不抛错；`.env` / `config.json` / `dev.config.json`
+ * 首次调用时懒加载并在进程内缓存；应用内相对路径一律基于宿主项目根解析。
+ *
+ * 完整约定（宿主根解析优先级、dev 取值优先级、`.env` BOM 与编码限制、告警脱敏纪律）
+ * 见本文件顶部 `@fileoverview` 与 README。
+ *
+ * 常用入口：getEnv / getConfig / isDev / getRootDir / setRootDir / resolveFromRoot
+ */
 export class Config {
     /**
      * 标记 .env 是否已经被加载

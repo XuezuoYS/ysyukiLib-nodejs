@@ -1,24 +1,34 @@
 import { HttpRes } from './httpRes.js';
 
 /**
- * 内置可选中间件（opt-in，默认不启用）
+ * @fileoverview 内置可选中间件（opt-in，默认不启用）
  *
  * 用法：`router.use(Middleware.cors()); router.use(Middleware.accessLog());`
  * 或在分组内 `group.use(...)` 只作用于该分组。
- *
- * 三者职责：
- * - cors：跨域响应头 + OPTIONS 预检短路（204，不进入处理器）；
- * - accessLog：在响应 `finish` 时输出一行访问日志（状态码取最终值，异常路径同样记录）；
- * - requestId：把请求标识回写到响应头，便于前后端与日志三方关联。
- *
- * @typedef {(ctx: any, next: () => Promise<void>) => any} MiddlewareFn
- * @typedef {object} CorsOptions
+ */
+
+/**
+ * @typedef {(ctx: any, next: () => Promise<void>) => any} MiddlewareFn 中间件函数签名
+ * @typedef {object} CorsOptions 跨域中间件选项（默认开放来源、不携带凭证）
  * @property {string} [origin] 允许的来源，默认 '*'（无凭证时的开放策略）
  * @property {string} [methods] 允许的方法
  * @property {string} [headers] 允许的请求头
  * @property {boolean} [credentials] 是否允许携带凭证；为 true 时必须显式指定非 '*' 的 origin，否则构造时抛错
  * @property {number} [maxAge] 预检结果缓存秒数
  * @property {boolean} [preflight] 是否短路 OPTIONS 预检
+ */
+
+/**
+ * 内置可选中间件工厂（全静态方法，不调用即不生效）
+ *
+ * 三者职责：
+ * - cors：跨域响应头 + OPTIONS 预检短路（204，不进入处理器）；
+ * - accessLog：在响应 `finish` 时输出一行访问日志（状态码取最终值，异常路径同样记录）；
+ * - requestId：把请求标识回写到响应头，便于前后端与日志三方关联。
+ *
+ * 完整约定（各选项默认值与预检行为）见本文件顶部 `@fileoverview` 与 docs/httpServer.md 的「内置中间件」。
+ *
+ * 常用入口：cors / accessLog / requestId
  */
 export class Middleware {
     /**
