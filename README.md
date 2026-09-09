@@ -40,20 +40,24 @@ pnpm add github:XuezuoYS/ysyukiLib-nodejs#semver:^0.1.0
 
 ## 使用
 
-宿主 `package.json` 加一条 `imports` 映射，即可沿用统一的 `#YukiLib/*` 写法：
+*推荐* 宿主 `package.json` 加 `imports` 映射，以简短写法，例如：
 
 ```json
-{ "imports": { "#YukiLib/*": "ysyuki-lib-on-nodejs/*" } }
+{
+    "imports": {
+        "#YukiLibG/*": "ysyuki-lib-on-nodejs/*"
+    }
+}
 ```
+
+调用例：
 
 ```js
-import { Config } from '#YukiLib/config';
-import { Logger } from '#YukiLib/logger';
-import { HttpServer, Router, HttpReq, HttpRes, AppError } from '#YukiLib/httpServer';
+// 没有简短写法的
+import { Config } from 'ysyuki-lib-on-nodejs/config';
+// 简短后
+import { Logger } from '#YukiLibG/logger';
 ```
-
-> `#YukiLib/*` 由**宿主自己的** `imports` 提供（该字段是包内私有的，库无法替宿主声明）；
-> 不配这条映射就用包名写法 `import { Logger } from 'ysyuki-lib-on-nodejs/logger'`，两者指向同一实现。
 
 ### 起一个服务
 
