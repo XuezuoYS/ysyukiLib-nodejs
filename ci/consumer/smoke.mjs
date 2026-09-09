@@ -3,7 +3,7 @@
  *
  * 由 CI 复制到临时消费者目录（`ci/consumer/package.json` 的旁边）后执行，
  * 因此本文件所在目录的 `package.json` 里带着宿主侧 `imports` 别名
- * `"#YukiLib/*": "ysyuki-lib-on-nodejs/*"` —— 这正是 README「接入」承诺的写法，
+ * `"#YukiLib/*": "ysyuki-lib-on-nodejs/*"` —— 这正是 README「使用」承诺的写法，
  * 库内测试只能证明库自己能用别名，安装态必须另外验。
  *
  * 覆盖四件事：

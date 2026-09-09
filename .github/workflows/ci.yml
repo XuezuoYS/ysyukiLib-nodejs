@@ -4,7 +4,7 @@ name: CI
 #   1. 三系统矩阵跑既有验收命令（pnpm check / pnpm test），不改一行源码与脚本；
 #   2. pnpm pack → 临时消费者装 tarball，验证「包边界 + exports + 宿主 #YukiLib/* 别名」；
 #   3. 版本门禁：package.json 的 version 严格大于最新 v* tag 时，自动打并推送新 tag；
-#   4. 装完 tag 的真实消费者校验（就是 README「方式二」里给宿主的那几条命令）。
+#   4. 装完 tag 的真实消费者校验（就是 README「安装」里给宿主的那几条命令）。
 #
 # 为什么打 tag 与安装校验放在同一个工作流里：由 GITHUB_TOKEN 推送的 tag **不会**触发
 # 新的工作流运行（GitHub 防自激规则），所以不能靠独立的 `on: push: tags:` 来校验；
@@ -230,7 +230,7 @@ jobs:
           }
 
           case "$MODE" in
-            # 与 README「方式二」第一条命令逐字一致：owner/repo 简写 + #tag
+            # 与 README「安装」第一条命令逐字一致：owner/repo 简写 + #tag
             shorthand)
               github_auth_rewrite
               SPEC="github:${REPO}#${TAG}"
