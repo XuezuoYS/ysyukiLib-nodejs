@@ -37,7 +37,7 @@
 
 JSDoc + `jsconfig.json` 的 `checkJs`（等价于全库 `// @ts-check`）语义；
 
-风格参考：
+函数注释风格参考：
 
 ```js
 /**
@@ -53,6 +53,36 @@ function aFunction(paramA, paramB = 'some text', paramI = 123) {}
 ```
 
 注意：应在全部 @param 前写一行式 @default 可包含多个赋值
+
+类注释风格参考（`export class` 之前**紧挨着**的那一段就是 IDE hover 能看到的唯一一段）：
+
+```js
+/**
+ * 类描述（一句话摘要）
+ *
+ * 契约摘要：本类对外承诺的关键行为，一到三行写完；
+ *
+ * 常用入口：
+ * - aMethod: 说明
+ * - bMethod: 说明
+ * ...
+ */
+export class AClass {
+    /**
+     * 方法描述
+     */
+    static aStaticMethod() {}
+}
+```
+
+注意：
+
+1. 类说明必须**紧贴 `export class X {`**，中间只允许空行；一旦隔了 `import`、常量、
+   `@typedef` 块或任何函数，那段注释就归了别的节点，类 hover 为空（方法不受影响，
+   因为每个方法上方就是它自己那段 JSDoc）。
+2. 文件级说明写成 `/** @fileoverview … */`（或普通 `//` 注释）；`@fileoverview` 块**也不能紧贴 class**，紧贴时它会顶掉类注释。
+3. `@typedef` / `@property` 一律独立成块，不与类描述同块：同块时整块被 typedef 认领，
+   类 hover 为空。只能拆块，不能删（删了会丢类型并抬高 `pnpm check` 诊断数）。
 
 ## 验收
 
