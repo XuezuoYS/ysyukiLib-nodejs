@@ -383,6 +383,19 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
       目录被外部删除的情形。清理改按刚写入的那个目录执行，且单个旧文件删不掉
       （Windows 常见 `EBUSY`）时跳过，不再打断滚动状态推进。
     公共 API、行格式与等级/目录配置语义均未变化（`Logger.cleanup()` 签名不变）。
+24. **测试夹具避开 fetch 禁端口**（本次，仅测试）：`httpServer` 的用例普遍用 `listen(0)` 让系统
+    分配端口，再用全局 `fetch()` 打真实请求。而 WHATWG Fetch 带有一份 **port block list**，
+    `fetch()` 在建连之前就会拒绝它（`TypeError: fetch failed`，`cause: bad port`），
+    清单里的 `1719 / 2049 / 3659 / 4045 / 5060 / 5061 / 6000 / 6566 / 6665–6669 / 6697 / 10080`
+    都落在本机 Windows 的临时端口区间内（`netsh int ipv4 show dynamicport tcp` 实测
+    起始 1024、共 13977 个）——于是系统偶尔把禁端口分给测试服务，表现为 `server.test.js`
+    随机红掉一两个用例，且每次红的用例不同（同一份代码连跑 6 次约中 1 次，与被测代码无关）。
+    现在三处真实监听统一走 `test/httpServer/fetchPortFixture.js` 的 `listenOnFetchablePort`：
+    抽中禁端口就 `close()` 后重新 `listen(0)`（系统的分配计数器会向前走，一两轮即越过），
+    刻意不改用固定端口——固定端口会带来占用与并行冲突。只有走全局 `fetch()` 的用例受影响，
+    `http.request` 与 `HttpClient`（`node:https`）都不查这份清单，故产品代码零改动。
+    夹具自带 5 例自检（清单成员与端口可用性实测断言、重试时逐个关闭、连续失败明确报错），
+    防止它悄悄退化成"看起来在做事的空转"。
 
 ## 从旧 API 迁移（宿主改造用）
 

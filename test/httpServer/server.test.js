@@ -14,12 +14,16 @@ import { Middleware } from '#YukiLib/httpServer/middleware';
 import { Router } from '#YukiLib/httpServer/router';
 
 import { captureStdoutAsync } from '../loggerFixture.js';
+import { listenOnFetchablePort } from './fetchPortFixture.js';
 
 /**
  * HttpServer 集成测试（真实监听 127.0.0.1 临时端口）
  *
  * 覆盖：上下文建立、路径参数注入、返回值自动序列化、请求体解析与上限、
  * 404/405/AppError/未捕获/已写出 五条兜底分支、HEAD 抑制、中间件洋葱、并发隔离。
+ *
+ * 端口一律由系统分配后经 `listenOnFetchablePort` 过一遍：`listen(0)` 偶尔会分到
+ * WHATWG fetch 的禁端口，`fetch()` 在建连前就报 `bad port`（与被测代码无关的随机红）。
  */
 
 const SERVICE_NAME = 'test-service';
@@ -56,11 +60,26 @@ async function startServer(configure, options = {}) {
         exitOnShutdown: false,
         ...options,
     });
-    await new Promise((resolve) => {
-        server.listen(0, '127.0.0.1', () => resolve(undefined));
-    });
     startedServers.push(server);
-    return `http://127.0.0.1:${server.port}`;
+    const port = await listenHttpServer(server);
+    return `http://127.0.0.1:${port}`;
+}
+
+/**
+ * 启动监听并返回可被 fetch 使用的端口
+ *
+ * 系统偶尔把 WHATWG fetch 的禁端口（见 fetchPortFixture.js）分配给 `listen(0)`，
+ * 之后每个 `fetch()` 都在建连前抛 `bad port`，用例随机红；这里避开这些端口重听。
+ * 夹具自身的用例（含"关闭后能重新监听"这条真实往返）在 fetchPortFixture.test.js。
+ *
+ * @param {HttpServer} server 未启动的服务
+ * @returns {Promise<number>} 实际监听端口
+ */
+async function listenHttpServer(server) {
+    return listenOnFetchablePort(
+        () => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.port))),
+        () => server.close(),
+    );
 }
 
 /**
@@ -837,11 +856,11 @@ describe('HttpServer：全局中间件先于路由决策（方案 A）', () => {
             router: scoped, serviceName: SERVICE_NAME, host: '127.0.0.1', port: 0,
             gracefulShutdown: false, logLevel: 'error',
         });
-        await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(undefined)));
+        const base = `http://127.0.0.1:${await listenHttpServer(server)}`;
         try {
-            const hit = await fetch(`http://127.0.0.1:${server.port}/hit`);
+            const hit = await fetch(`${base}/hit`);
             assert.deepEqual(await hit.json(), { ok: true });
-            const miss = await fetch(`http://127.0.0.1:${server.port}/nope`);
+            const miss = await fetch(`${base}/nope`);
             assert.equal(miss.status, 404);
 
             assert.deepEqual(seen, ['G GET /hit', 'G GET /nope'], '全局中间件应覆盖未命中请求');
@@ -1020,11 +1039,9 @@ describe('HttpServer：优雅关闭（进程级共享信号注册）', () => {
             gracefulShutdown: true,
             ...options,
         });
-        await new Promise((resolve) => {
-            server.listen(0, '127.0.0.1', () => resolve(undefined));
-        });
+        const port = await listenHttpServer(server);
         gracefulServers.push(server);
-        return { server, base: `http://127.0.0.1:${server.port}` };
+        return { server, base: `http://127.0.0.1:${port}` };
     }
 
     /**
