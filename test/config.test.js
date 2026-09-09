@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -127,6 +127,24 @@ describe('Config.getConfig', () => {
     });
 });
 
+/**
+ * 直接取 JSON.parse 的原始失败消息
+ *
+ * 用于"自校验夹具"：确认当前 V8 在这种坏 JSON 上确实会把文件原文片段写进 message，
+ * 否则下面的脱敏断言就是空测试（trailing-comma 之类形态不会内泄，早年正是因此漏掉 B4）。
+ *
+ * @param {string} content 坏 JSON 文本
+ * @returns {string} SyntaxError 的 message；意外解析成功时返回空串
+ */
+function rawParseMessage(content) {
+    try {
+        JSON.parse(content);
+        return '';
+    } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+    }
+}
+
 describe('Config：config.json 不可用告警（M4）', () => {
     it('文件缺失：告警一次并带上路径与原因，重复取值不刷屏', () => {
         const bare = mkdtempSync(join(tmpdir(), 'ysyuki-warn-missing-'));
@@ -142,14 +160,55 @@ describe('Config：config.json 不可用告警（M4）', () => {
             assert.equal(warned[0].level, 'WARN');
             assert.equal(warned[0].fields.file, join(bare, 'config.json'));
             assert.match(warned[0].fields.reason, /ENOENT|no such file/i);
+            assert.doesNotMatch(warned[0].fields.reason, /[\\/]/, '原因不带路径（路径由 file 字段给出）');
         } finally {
             Config.setRootDir(dir);
             rmSync(bare, { recursive: true, force: true });
         }
     });
 
-    it('解析失败：告警一次并带解析原因，且不含文件内容', () => {
-        const badDir = mkdtempSync(join(tmpdir(), 'ysyuki-warn-bad-'));
+    it('解析失败：原因脱敏，V8 消息里的原文片段不得进日志（B4）', () => {
+        // 这两种坏 JSON 都走 V8 "把原文片段写进 message" 的分支：
+        //   SyntaxError: Unexpected token 'D', "DB_PASSWOR"... is not valid JSON
+        //   SyntaxError: Unexpected token 'S', "{"pw": S3cr3t-P@s"... is not valid JSON
+        // 旧实现把 err.message 原样写入 reason，于是键名 / 口令片段同时进了 stdout 与日志文件，
+        // 与同文件声明的"不输出文件内容"承诺直接矛盾。
+        // 注意：行尾逗号（`,}`）形态走 "Expected ... in JSON at position N" 分支，
+        // 消息里不含内容片段——最初的夹具正是因此一直没暴露这条泄漏路径。
+        const cases = /** @type {const} */ ([
+            ['DB_PASSWORD=S3cr3t-P@ss!, {broken', /DB_PASSWOR/],
+            ['{"pw": S3cr3t-P@ssw0rd}', /S3cr3t-P@s/],
+        ]);
+
+        for (const [content, leaked] of cases) {
+            // 自校验：确认当前 V8 在这种坏 JSON 上确实内泄（否则本用例是空测试；
+            // 若日后 V8 改了文案形态，请换用仍会内泄的形态，而不是删掉这条断言）
+            assert.match(rawParseMessage(content), leaked, '夹具应确实会内泄内容片段');
+
+            const badDir = mkdtempSync(join(tmpdir(), 'ysyuki-warn-bad-'));
+            writeFileSync(join(badDir, 'config.json'), content, 'utf8');
+            Config.setRootDir(badDir);
+            try {
+                const entries = captureStdout(() => {
+                    assert.equal(Config.getConfig('pw'), false);
+                });
+                const warned = entries.filter((entry) => entry.message.includes('读取或解析失败'));
+                assert.equal(warned.length, 1);
+                assert.equal(warned[0].level, 'WARN');
+                assert.equal(warned[0].fields.file, join(badDir, 'config.json'));
+                assert.ok(warned[0].fields.reason.length > 0, '仍须给出可判读的原因');
+                const line = JSON.stringify(warned[0]);
+                assert.doesNotMatch(line, leaked, '告警不得输出文件内容片段');
+                assert.doesNotMatch(line, /S3cr3t/, '告警不得输出配置值');
+            } finally {
+                Config.setRootDir(dir);
+                rmSync(badDir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('解析失败（不内泄的形态）：同样只给脱敏原因', () => {
+        const badDir = mkdtempSync(join(tmpdir(), 'ysyuki-warn-comma-'));
         writeFileSync(join(badDir, 'config.json'), '{"secret":"SHOULD-NOT-LEAK",}', 'utf8');
         Config.setRootDir(badDir);
         try {
@@ -158,13 +217,32 @@ describe('Config：config.json 不可用告警（M4）', () => {
             });
             const warned = entries.filter((entry) => entry.message.includes('读取或解析失败'));
             assert.equal(warned.length, 1);
-            assert.equal(warned[0].level, 'WARN');
             assert.equal(warned[0].fields.file, join(badDir, 'config.json'));
-            assert.ok(warned[0].fields.reason.length > 0);
+            assert.match(warned[0].fields.reason, /SyntaxError|JSON/);
             assert.doesNotMatch(JSON.stringify(warned[0]), /SHOULD-NOT-LEAK/, '告警不得输出文件内容');
         } finally {
             Config.setRootDir(dir);
             rmSync(badDir, { recursive: true, force: true });
+        }
+    });
+
+    it('读取失败（非 ENOENT）：走通用文案，原因为 errno 码且不含路径', () => {
+        const dirAsFile = mkdtempSync(join(tmpdir(), 'ysyuki-warn-eisdir-'));
+        // config.json 位置放一个目录：readFileSync 抛 EISDIR（Windows 下亦可能 EPERM）
+        mkdirSync(join(dirAsFile, 'config.json'));
+        Config.setRootDir(dirAsFile);
+        try {
+            const entries = captureStdout(() => {
+                assert.equal(Config.getConfig('host'), false);
+            });
+            const warned = entries.filter((entry) => entry.message.includes('读取或解析失败'));
+            assert.equal(warned.length, 1);
+            assert.doesNotMatch(warned[0].message, /不存在/);
+            assert.match(warned[0].fields.reason, /^E(ISDIR|PERM|ACCES)/);
+            assert.doesNotMatch(warned[0].fields.reason, /[\\/]/, '原因里不带路径（路径由 file 字段给出）');
+        } finally {
+            Config.setRootDir(dir);
+            rmSync(dirAsFile, { recursive: true, force: true });
         }
     });
 

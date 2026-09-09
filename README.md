@@ -192,7 +192,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 
 | 路径 | 必需 | 说明 |
 | --- | --- | --- |
-| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失、解析失败或内容整体不是对象（如文件就是 `null`）时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置） |
+| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失、解析失败或内容整体不是对象（如文件就是 `null`）时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置；WARN 只带文件路径与**脱敏后的**失败类别，不带异常 message 与文件内容） |
 | `.env` | 否 | `Config.getEnv(key)` 补充来源；系统环境变量优先，文件缺失静默忽略 |
 | `dev.config.json` | 否 | **存在即开发环境**：日志全级别、`getConfig` 走 dev 覆盖链 |
 | `CA/cacert.pem` | 否 | HTTPS 自定义 CA；**公共站点无需配置**（Node 自带根 CA 且默认校验证书链），文件缺失时回退系统 CA；`ca` 为替换语义，只放需额外信任的私有 CA |
@@ -281,7 +281,7 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
 14. **config.json 不可用告警**（本次）：`config.json` 缺失或解析失败时，`Config.getConfig`
     仍返回 `false`（行为不变），但会经 `Logger.warn` 记录一次警告（含文件路径与失败原因，
     不输出文件内容）；同一宿主根只告警一次，`setRootDir()` 重置。此前完全静默，
-    配置未生效却无从察觉。
+    配置未生效却无从察觉。（"不输出文件内容"这一承诺最初被 `reason` 破坏，见第 22 条。）
 
 15. **默认等级缓存**（本次）：`Logger.defaultLevel` 的 dev 判定按开发配置路径缓存，
     写日志不再每条同步 `existsSync`（实测 8.56µs/条 → 0.37µs/条，降幅 96%）。
@@ -348,6 +348,17 @@ server.logger.level = 'warn';                       // 运行期调整本实例�
     用法约定随之写明：**单次凭据请走 headers 入参**，不要 `headerAdd` 进实例（那是共享状态）；
     `client.url` / `client.ssl` 只是排障观测值，并发下由最后写入者决定，某次请求的最终 URL
     取该次返回值的 `rawInfo.url`。
+
+22. **config.json 告警原因脱敏**（本次，修复）：第 14 条的 WARN 原先把 `err.message` 原样写进
+    `reason` 字段，而 `JSON.parse` 的 SyntaxError 消息**内嵌出错位置附近最多约 20 个字符的文件原文**
+    （输入较短时甚至是全文）——实测 `DB_PASSWORD=S3cr3tP@ss!, {broken` 会记成
+    `reason:"Unexpected token 'D', \"DB_PASSWOR\"... is not valid JSON"`，把口令键名前缀同时抄进了
+    stdout 与日志文件，与同文件"不输出文件内容"的承诺相反。原测试用行尾逗号（`,}`）做夹具，
+    那种形态走的是不含原文的 `Expected ... at position N` 分支，因此一直没暴露这条泄漏路径。
+    现 `reason` 一律由调用方给出**确定不含内容**的文本：读取失败记 errno 码（`ENOENT` / `EACCES` /
+    `EISDIR`，路径本就由 `file` 字段单独给出）、解析失败记固定的 `SyntaxError` 类别说明、
+    顶层非对象记 `typeof`（不记值本身）。告警文案、去重语义与 `getConfig` 返回值均未变化。
+    需要精确行列时请在受控终端里自行复现一次 `JSON.parse`，不要让库把配置内容写进共享日志。
 
 ## 从旧 API 迁移（宿主改造用）
 

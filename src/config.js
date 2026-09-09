@@ -12,6 +12,7 @@ import { Logger } from './logger.js';
  * 文件缺失、解析失败，或解析结果不是对象（文件内容整体是 null / 数字 / 字符串等）时，
  * getConfig 一律返回 false，并**经 Logger.warn 记录一次**警告
  * （同一宿主根只告警一次；静默失败会让人误以为"配置生效了"）。
+ * 该警告只记录路径与脱敏后的失败类别，绝不记录异常 message 或文件内容（防密钥入日志）。
  * 任何情况下 getConfig 都不因配置数据形态而抛 TypeError。
  *
  * 开发环境：宿主项目根存在 `dev.config.json`（不入库）时 Config.isDev() 为 true，
@@ -279,8 +280,13 @@ export class Config {
      * 文件缺失、解析失败，或解析结果不是对象（内容整体是 `null` / 数字 / 字符串等）时
      * 返回 false（调用方静默回退），但会经 Logger.warn 记录一次
      * 警告：`getConfig` 此时一律返回 false，配置实际未生效，静默失败最难排查。
-     * 警告按宿主根去重（setRootDir 重置），重复取值不会刷屏；只记录路径与原因，
-     * 不输出文件内容（避免把密钥写进日志）。
+     * 警告按宿主根去重（setRootDir 重置），重复取值不会刷屏。
+     *
+     * 记录范围严格限定为"路径 + 脱敏原因"：原因只到错误类别（errno 码、`SyntaxError`、
+     * 顶层值类型）为止，**绝不使用异常的 `message`**——`JSON.parse` 的 SyntaxError 消息
+     * 会内嵌文件原文片段，等于把 config.json 里的口令抄进 stdout 与日志文件
+     * （见 {@link Config.#parseFailureReason} 的注释）。需要精确行列时，请在受控终端里
+     * 自行用 node 复现一次解析，而不是让库把文件内容写进共享日志。
      *
      * @returns {boolean} 读取成功返回 true，失败返回 false
      */
@@ -295,7 +301,10 @@ export class Config {
         try {
             content = readFileSync(file, 'utf8');
         } catch (err) {
-            Config.#warnConfigUnavailable(file, err);
+            // 只取 errno 码（ENOENT / EACCES / EISDIR …）：其 message 里除路径外没有更多信息，
+            // 而路径已经由 file 字段单独记录
+            const code = Config.#errorLabel(err);
+            Config.#warnConfigUnavailable(file, code, code === 'ENOENT');
             return false;
         }
 
@@ -304,16 +313,17 @@ export class Config {
         try {
             parsed = JSON.parse(stripBom(content));
         } catch (err) {
-            Config.#warnConfigUnavailable(file, err);
+            Config.#warnConfigUnavailable(file, Config.#parseFailureReason(err));
             return false;
         }
 
         if (!isKeyableObject(parsed)) {
             // JSON.parse 成功但内容不是配置对象（如整个文件就是 `null`）：
-            // 与解析失败同等处理，否则后续按键取值会抛 TypeError
-            Config.#warnConfigUnavailable(file, new TypeError(
+            // 与解析失败同等处理，否则后续按键取值会抛 TypeError。
+            // 只报顶层类型（typeof），不报值本身——字符串/数字配置文件的值同样可能含密钥。
+            Config.#warnConfigUnavailable(file,
                 `config.json 内容不是对象（实际为 ${parsed === null ? 'null' : typeof parsed}）`,
-            ));
+            );
             return false;
         }
 
@@ -328,20 +338,67 @@ export class Config {
      * 同一次解析（同一宿主根）只告警一次：`isConfigLoaded` 在失败时保持 false，
      * 每次 getConfig 都会重试读取，不去重会随取值次数刷屏。
      *
+     * `reason` 必须是调用方已经确认**不含文件内容**的文本（errno 码、固定文案、typeof），
+     * 不得再把异常的 `message` 直接传进来：见 {@link Config.#parseFailureReason}。
+     *
      * @param {string} file 配置文件绝对路径
-     * @param {any} err 失败原因
+     * @param {string} reason 脱敏后的失败原因
+     * @param {boolean} [missing] 是否为"文件不存在"（决定告警文案）
+     * @default missing = false
      */
-    static #warnConfigUnavailable(file, err) {
+    static #warnConfigUnavailable(file, reason, missing = false) {
         if (Config.#hasWarnedConfig) {
             return;
         }
         Config.#hasWarnedConfig = true;
 
-        const missing = err !== null && typeof err === 'object' && /** @type {any} */ (err).code === 'ENOENT';
         Logger.warn(missing ? 'config.json 不存在，Config.getConfig 将一律返回 false' : 'config.json 读取或解析失败，Config.getConfig 将一律返回 false', {
             file,
-            reason: err instanceof Error ? err.message : String(err),
+            reason,
         });
+    }
+
+    /**
+     * 取异常的"可安全记录标识"
+     *
+     * 只用 errno `code`（ENOENT / EACCES / EISDIR 等）；没有 code 时退化为错误类型名。
+     * 二者都与被读出的内容无关，而 `message` 不满足这一点，故这里刻意不去取它。
+     * 非 Error 的抛出值只报 `typeof`：不能对未知值调用 `String(err)`（它可能就是内容本身）。
+     *
+     * @param {any} err 捕获到的异常
+     * @returns {string} 错误码，或错误类型名
+     */
+    static #errorLabel(err) {
+        const code = err !== null && typeof err === 'object' ? /** @type {any} */ (err).code : undefined;
+        if (typeof code === 'string' && code !== '') {
+            return code;
+        }
+        if (err instanceof Error) {
+            return err.name;
+        }
+        return typeof err;
+    }
+
+    /**
+     * JSON.parse 失败原因（脱敏）
+     *
+     * V8 的 SyntaxError 消息会把**出错位置附近的原文片段**放进引号里：
+     * ```
+     * SyntaxError: Unexpected token 'D', "DB_PASSWOR"... is not valid JSON
+     * ```
+     * 输入较短时给出的甚至是全文（`Unexpected token '}', "{"a": tru}" is not valid JSON`）。
+     * config.json 里通常是数据库口令、第三方密钥，把 message 原样写进 WARN 等于
+     * 把密钥同时抄进 stdout 和日志文件，因此整条 message 一律丢弃，只给出固定类别。
+     *
+     * @param {any} err JSON.parse 抛出的异常
+     * @returns {string} 不含文件内容的失败原因
+     */
+    static #parseFailureReason(err) {
+        if (err instanceof SyntaxError) {
+            return 'SyntaxError: 不是合法 JSON（原始消息可能含文件内容片段，已省略以免泄漏密钥）';
+        }
+        // 理论上到不了这里（JSON.parse 只抛 SyntaxError），保留兜底以策安全
+        return Config.#errorLabel(err);
     }
 
     /**
