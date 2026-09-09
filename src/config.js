@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 
 import { Logger } from './logger.js';
@@ -36,6 +36,10 @@ import { Logger } from './logger.js';
  * `.env` 用 `process.loadEnvFile()` 原生加载（Node 20.6+），
  * 其语义为"已存在的 `process.env` 键不被覆盖"，即系统环境变量优先，文件缺失时忽略；
  * 生产环境全部由 Windows 系统/服务环境提供，不依赖 `.env`。
+ * 该原生解析器不剥离 UTF-8 BOM（会把 BOM 并入首个键名），故加载后统一修正，
+ * 与 `config.json` / `dev.config.json` 的 BOM 容忍保持同一威胁模型；
+ * BOM 导致首行整行不被识别的形态（`export KEY=` / 缩进）无法修正，改为 Logger.warn 告警一次；
+ * UTF-16 编码的 `.env` 不支持（Node 按 UTF-8 读，失效形态是整个文件全键取不到）。
  *
  */
 
@@ -46,17 +50,98 @@ import { Logger } from './logger.js';
 const ROOT_ENV_KEY = 'YUKI_PROJECT_ROOT';
 
 /**
- * 去除 UTF-8 BOM
+ * 去除 UTF-8 BOM（JSON 文本）
  *
  * Windows 记事本、PowerShell 5.1 等写出的 JSON 常带 BOM，
  * 而 JSON.parse 不接受行首 BOM（会静默解析失败）；
  * 作为通用库在此统一剥离，避免"文件明明存在却取值全为 false"。
+ *
+ * `.env` 的同一威胁模型见 {@link repairBomEnvKeys}：它走原生
+ * `process.loadEnvFile()`，无法在解析前剥离 BOM，只能加载后修正被写坏的键名。
  *
  * @param {string} text 文件内容
  * @returns {string} 去 BOM 后的内容
  */
 function stripBom(text) {
     return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
+/**
+ * 修复 `.env` 带 UTF-8 BOM 时被写坏的首个键
+ *
+ * 与 {@link stripBom} 同一个威胁模型（Windows 记事本、PowerShell 5.1
+ * `Set-Content -Encoding UTF8`），但 `.env` 由原生 `process.loadEnvFile()` 解析，
+ * 调用方碰不到它解析前的文本；Node 也不剥离 BOM —— 解码后的 U+FEFF 会并入第一行的
+ * 键名，于是 `KEY=value` 变成 `"\uFEFFKEY"=value`：按正常键名取值静默得到 undefined
+ * （同文件的其余键全部正常，现象最迷惑）。这里在加载后把坏键改回正常名并删除，
+ * 避免宿主再把它继承给子进程。
+ *
+ * 两条约束：
+ * 1. 只处理 `before` 之后新增的 BOM 键——宿主进程继承来的环境一律不动；
+ * 2. 正常名已能取到值时不覆盖（维持"系统环境变量优先于 `.env`"），只删坏键。
+ *    `loadEnvFile` 的"已存在键不覆盖"检查是对**坏键名**做的，所以文件值确实会以坏键名
+ *    落进 `process.env`，修复若一味改名就会把文件值盖到系统值上。
+ *
+ * 只能修"键名被 BOM 污染"这一种形态：BOM 之后紧跟 `export ` 或缩进时
+ * （`"\uFEFFexport KEY=v"`、`"\uFEFF  KEY=v"`），整行在 Node 的解析里就不匹配，
+ * 值根本没进过 `process.env`，无从改名恢复；该形态改由 {@link Config.#warnBomFirstLineLost}
+ * 告警一次（见 `envRead`），而不是假装修好了。
+ *
+ * @param {Set<string>} before 加载前已存在的 BOM 前缀键名集合
+ * @returns {void}
+ */
+function repairBomEnvKeys(before) {
+    for (const key of Object.keys(process.env)) {
+        if (key.charCodeAt(0) !== 0xFEFF || before.has(key)) {
+            continue;
+        }
+        const cleanKey = key.slice(1);
+        const value = process.env[key];
+        if (cleanKey !== '' && value !== undefined && process.env[cleanKey] === undefined) {
+            process.env[cleanKey] = value;
+        }
+        delete process.env[key];
+    }
+}
+
+/**
+ * 取带 BOM 的 `.env` 首行的键名
+ *
+ * 用于 {@link Config.envRead} 判断"首行被原生解析器整行丢弃"这一种 BOM 形态：
+ * 此时值根本没进过 `process.env`，本库无从改名恢复（本库不接管 `.env` 的解析），
+ * 但至少要把这声"文件明明存在却少一个键"说出来，而不是继续静默。
+ *
+ * 只读文件头部若干字节，且返回值只用作**存在性判断**：键名本身绝不写进日志
+ * （键名也是文件内容，与 `#warnConfigUnavailable` 同一脱敏纪律）。
+ * 无 BOM、文件读不到、首行不是赋值形态或键名超出读取范围时返回 null（宁可漏告警，不误告警）。
+ *
+ * @param {string} file `.env` 绝对路径
+ * @returns {string|null} 首行赋值形态的键名，否则 null
+ */
+function detectBomFirstEnvKey(file) {
+    /** @type {number|undefined} */
+    let fd;
+    try {
+        fd = openSync(file, 'r');
+        const head = Buffer.alloc(1024);
+        // 注意实参顺序：fs.readSync(fd, buffer, offset, length, position)
+        const bytes = readSync(fd, head, 0, head.length, 0);
+        const text = head.subarray(0, bytes).toString('utf8');
+        if (text.charCodeAt(0) !== 0xFEFF) {
+            return null;
+        }
+        const newLine = text.indexOf('\n', 1);
+        const firstLine = newLine === -1 ? text.slice(1) : text.slice(1, newLine);
+        const matched = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=/.exec(firstLine);
+        return matched === null ? null : matched[1];
+    } catch {
+        // 文件不存在 / 不可读 / 不是普通文件：由 loadEnvFile 那条路径统一按"忽略"处理
+        return null;
+    } finally {
+        if (fd !== undefined) {
+            closeSync(fd);
+        }
+    }
 }
 
 /**
@@ -257,6 +342,16 @@ export class Config {
     /**
      * 读取 .env 文件至 process.env（已存在的键不覆盖，即系统环境优先）
      *
+     * 带 UTF-8 BOM 的文件（Windows 记事本、PowerShell 5.1 `Set-Content -Encoding UTF8`）
+     * 会被原生解析器把 BOM 并入首个键名，故加载后修正，见 {@link repairBomEnvKeys}。
+     *
+     * 两处原生解析器限制本库无法修正（BOM 只影响第一行，其余行一律正常）：
+     * - 首行写作 `export KEY=...` 或键名前带缩进：整行不被原生解析器匹配，值从未进入
+     *   `process.env`，无从改名恢复 → 改为经 `Logger.warn` 记录一次（见 {@link Config.#warnBomFirstLineLost}）；
+     * - UTF-16 编码的 `.env`：Node 按 UTF-8 读，失效形态是全键取不到而非只丢首键，
+     *   本库不识别也不告警（Node 原生 `--env-file` 同样不支持）。
+     * 生产环境请由系统/服务环境提供，或把 `.env` 存为"UTF-8（无 BOM）"。
+     *
      * @returns {boolean} 恒返回 true（文件缺失时按已确认决策忽略，环境变量仍可由系统环境提供）
      */
     static envRead() {
@@ -264,14 +359,46 @@ export class Config {
             return true;
         }
 
+        const file = Config.resolveFromRoot('.env');
+        // 仅当文件带 BOM 时返回首行键名；先记下系统环境是否已提供该键（已有值就不算丢失）
+        const bomFirstKey = detectBomFirstEnvKey(file);
+        const providedBySystem = bomFirstKey !== null && process.env[bomFirstKey] !== undefined;
+
         try {
-            process.loadEnvFile(Config.resolveFromRoot('.env'));
+            // 只修复本次加载引入的 BOM 键，宿主进程继承的环境一律不动
+            const bomBefore = new Set(Object.keys(process.env).filter((key) => key.charCodeAt(0) === 0xFEFF));
+            process.loadEnvFile(file);
+            repairBomEnvKeys(bomBefore);
+
+            if (bomFirstKey !== null && !providedBySystem && process.env[bomFirstKey] === undefined) {
+                Config.#warnBomFirstLineLost(file);
+            }
         } catch {
             // .env 不存在或不可读：忽略（生产环境全部由系统环境提供）
         }
 
         Config.isEnvLoaded = true;
         return true;
+    }
+
+    /**
+     * BOM 吞掉 `.env` 首行时的单次警告
+     *
+     * 与"文件缺失静默忽略"不冲突：文件确实在、也确实想提供配置，只是首行没被原生解析器认出来，
+     * 这种"看着生效其实少一个键"的静默失败正是本库反复声明要避免的形态（见 `#warnConfigUnavailable`）。
+     *
+     * 记录范围仍是"路径 + 固定文案"：**不记录键名**（键名也是文件内容，与既有脱敏纪律一致），
+     * 定位交给"第一行"这个位置信息。每次宿主根加载至多一次（`isEnvLoaded` 缓存，`setRootDir` 重置）。
+     *
+     * @param {string} file `.env` 绝对路径
+     * @returns {void}
+     */
+    static #warnBomFirstLineLost(file) {
+        Logger.warn('.env 首行未被加载，Config.getEnv 对首行的键将返回 false', {
+            file,
+            reason: '首行为 UTF-8 BOM + export / 缩进赋值形态，Node 原生 process.loadEnvFile 整行不匹配；'
+                + '键名与值一律不记录（键名也是文件内容），请把 .env 另存为 UTF-8（无 BOM）或改用系统环境变量',
+        });
     }
 
     /**

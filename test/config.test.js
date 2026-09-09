@@ -274,6 +274,52 @@ describe('Config：config.json 不可用告警（M4）', () => {
     });
 });
 
+/**
+ * UTF-8 BOM 解码后的字符（U+FEFF）与 CRLF 行尾
+ *
+ * 记事本与 PowerShell 5.1 的 `Set-Content -Encoding UTF8` 写出的文件正是
+ * "BOM + CRLF" 形态，`.env` 夹具需还原到字节级一致。
+ */
+const BOM_CHAR = '\uFEFF';
+const CRLF = '\r\n';
+
+/**
+ * 当前 `process.env` 中以 UTF-8 BOM 起始的键名
+ *
+ * `.env` 带 BOM 而未被剥离时，首键会被写成 `BOM_CHAR + 'KEY'`：按正常键名取不到，
+ * 还会被子进程继承，故加载修复后必须为空。
+ *
+ * @returns {string[]} 坏键名列表
+ */
+function bomEnvKeys() {
+    return Object.keys(process.env).filter((key) => key.charCodeAt(0) === 0xFEFF);
+}
+
+/**
+ * 删除测试引入的环境变量（连同可能的 BOM 前缀坏键一起清，保持用例自包含）
+ *
+ * @param {...string} keys 键名
+ * @returns {void}
+ */
+function cleanupEnv(...keys) {
+    for (const key of keys) {
+        delete process.env[key];
+        delete process.env[BOM_CHAR + key];
+    }
+}
+
+/**
+ * 生成一个宿主根临时目录，其 `.env` 以 UTF-8 BOM 开头并使用 CRLF 行尾
+ *
+ * @param {string} content `.env` 正文（不含 BOM，原样写入）
+ * @returns {string} 宿主根绝对路径
+ */
+function rootWithBomEnv(content) {
+    const bomDir = mkdtempSync(join(tmpdir(), 'ysyuki-envbom-'));
+    writeFileSync(join(bomDir, '.env'), Buffer.from(BOM_CHAR + content, 'utf8'));
+    return bomDir;
+}
+
 describe('Config：UTF-8 BOM 容忍', () => {
     it('config.json 带 BOM 仍可解析（Windows 记事本/PowerShell 常见）', () => {
         const bomDir = mkdtempSync(join(tmpdir(), 'ysyuki-bom-'));
@@ -284,6 +330,119 @@ describe('Config：UTF-8 BOM 容忍', () => {
         } finally {
             Config.setRootDir(dir);
             rmSync(bomDir, { recursive: true, force: true });
+        }
+    });
+
+    it('.env 带 BOM：首个键与其余键一样可取，且不残留坏键', () => {
+        const bomDir = rootWithBomEnv(`YSYUKI_TEST_BOM_FIRST=from-file${CRLF}YSYUKI_TEST_BOM_SECOND=from-file${CRLF}`);
+        Config.setRootDir(bomDir);
+        try {
+            // 首键是 BOM 唯一能影响到的键；次键在旧实现下同样正常，写在这里是为了把现象
+            // 钉在"只坏第一个"上，避免修复被误做成"整个文件自己重新解析一遍"。
+            assert.equal(Config.getEnv('YSYUKI_TEST_BOM_FIRST'), 'from-file');
+            assert.equal(Config.getEnv('YSYUKI_TEST_BOM_SECOND'), 'from-file');
+            assert.deepEqual(bomEnvKeys(), [], '不得残留 BOM 前缀键名（会被子进程继承）');
+            assert.equal(Config.envRead(), true, '重复加载幂等');
+        } finally {
+            cleanupEnv('YSYUKI_TEST_BOM_FIRST', 'YSYUKI_TEST_BOM_SECOND');
+            Config.setRootDir(dir);
+            rmSync(bomDir, { recursive: true, force: true });
+        }
+    });
+
+    it('.env 带 BOM 且系统环境已有同名首键：系统值优先，坏键仍被清掉', () => {
+        // loadEnvFile 的"已存在键不覆盖"检查是对**坏键名**做的，于是文件值仍以坏键名落进
+        // process.env；修复若只做"坏键改名"就会把文件值盖到系统值上，故单独覆盖一条。
+        process.env.YSYUKI_TEST_BOM_BOTH = 'from-system';
+        const bomDir = rootWithBomEnv(`YSYUKI_TEST_BOM_BOTH=from-file${CRLF}YSYUKI_TEST_BOM_TAIL=from-file${CRLF}`);
+        Config.setRootDir(bomDir);
+        try {
+            assert.equal(Config.getEnv('YSYUKI_TEST_BOM_BOTH'), 'from-system');
+            assert.equal(Config.getEnv('YSYUKI_TEST_BOM_TAIL'), 'from-file');
+            assert.deepEqual(bomEnvKeys(), [], '修复不得把文件值写进系统已有的键');
+        } finally {
+            cleanupEnv('YSYUKI_TEST_BOM_BOTH', 'YSYUKI_TEST_BOM_TAIL');
+            Config.setRootDir(dir);
+            rmSync(bomDir, { recursive: true, force: true });
+        }
+    });
+
+    it('夹具自校验：Node 原生 loadEnvFile 确实会把 BOM 并入首键名', () => {
+        const bomDir = rootWithBomEnv(`YSYUKI_TEST_BOM_RAW=from-file${CRLF}`);
+        try {
+            process.loadEnvFile(join(bomDir, '.env'));
+            // 若此断言失败，说明 Node 已自行剥离 BOM：请连同 Config.envRead 里的
+            // repairBomEnvKeys 调用与上面两条用例的坏键断言一并删除，而不是删掉本断言。
+            assert.ok(bomEnvKeys().includes(BOM_CHAR + 'YSYUKI_TEST_BOM_RAW'), '原生解析器应产出 BOM 前缀键名');
+        } finally {
+            cleanupEnv('YSYUKI_TEST_BOM_RAW');
+            rmSync(bomDir, { recursive: true, force: true });
+        }
+    });
+
+    it('.env 带 BOM 且首行为 export / 缩进形态：整行不被匹配，告警一次且不泄漏键名与值', () => {
+        // 与首键用例相对：Node 不把 U+FEFF 当空白，`\uFEFFexport KEY=v`、`\uFEFF  KEY=v`
+        // 整行匹配失败，值从未进入 process.env —— 本库不接管 .env 解析，无从改名恢复，
+        // 于是把这声"文件明明存在却少一个键"记成 WARN（只报路径与固定原因）。
+        const cases = /** @type {const} */ ([
+            ['export YSYUKI_TEST_BOM_EXP=exp-secret-value', 'YSYUKI_TEST_BOM_EXP'],
+            ['  YSYUKI_TEST_BOM_IND=ind-secret-value', 'YSYUKI_TEST_BOM_IND'],
+        ]);
+
+        for (const [firstLine, key] of cases) {
+            const bomDir = rootWithBomEnv(`${firstLine}${CRLF}YSYUKI_TEST_BOM_AFTER=ok${CRLF}`);
+            Config.setRootDir(bomDir);
+            try {
+                const entries = captureStdout(() => {
+                    assert.equal(Config.getEnv(key), false, '原生解析器整行丢弃');
+                    assert.equal(Config.getEnv('YSYUKI_TEST_BOM_AFTER'), 'ok', 'BOM 只影响第一行');
+                    assert.equal(Config.getEnv(key), false, '重复取值不得刷屏');
+                });
+                const warned = entries.filter((entry) => entry.message.includes('.env 首行未被加载'));
+                assert.equal(warned.length, 1, '同一宿主根只应告警一次');
+                assert.equal(warned[0].level, 'WARN');
+                assert.equal(warned[0].fields.file, join(bomDir, '.env'));
+                assert.match(warned[0].fields.reason, /UTF-8 BOM/);
+                assert.match(warned[0].fields.reason, /export|缩进/);
+
+                const line = JSON.stringify(warned[0]);
+                assert.doesNotMatch(line, /YSYUKI_TEST_BOM_EXP|YSYUKI_TEST_BOM_IND/, '告警不得输出键名（键名也是文件内容）');
+                assert.doesNotMatch(line, /exp-secret-value|ind-secret-value|YSYUKI_TEST_BOM_AFTER/, '告警不得输出配置值');
+                assert.deepEqual(bomEnvKeys(), [], '坏形态同样不得残留 BOM 前缀键');
+            } finally {
+                cleanupEnv(key, 'YSYUKI_TEST_BOM_AFTER');
+                Config.setRootDir(dir);
+                rmSync(bomDir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('不该出声的 BOM 形态：已修复、注释首行、系统已提供，均不告警', () => {
+        // 告警只留给"确实丢了一个键"的情形；下列三条都能正常取值，若也写 WARN，
+        // 宿主日志就会被正常路径刷屏（脱敏告警的价值就在于一响就一定有东西没生效）。
+        const cases = [
+            { label: '首键污染已被修复', first: 'YSYUKI_TEST_BOM_Q1=v1', second: 'YSYUKI_TEST_BOM_Q1_T=t', key: 'YSYUKI_TEST_BOM_Q1', systemValue: '', expected: 'v1' },
+            { label: 'BOM 后首行是注释', first: '# comment', second: 'YSYUKI_TEST_BOM_Q2=v2', key: 'YSYUKI_TEST_BOM_Q2', systemValue: '', expected: 'v2' },
+            { label: '系统环境已提供首键', first: 'YSYUKI_TEST_BOM_Q3=from-file', second: 'YSYUKI_TEST_BOM_Q3_T=t', key: 'YSYUKI_TEST_BOM_Q3', systemValue: 'from-system', expected: 'from-system' },
+        ];
+
+        for (const c of cases) {
+            if (c.systemValue !== '') {
+                process.env[c.key] = c.systemValue;
+            }
+            const bomDir = rootWithBomEnv(`${c.first}${CRLF}${c.second}${CRLF}`);
+            Config.setRootDir(bomDir);
+            try {
+                const entries = captureStdout(() => {
+                    assert.equal(Config.getEnv(c.key), c.expected, c.label);
+                });
+                assert.deepEqual(entries.filter((entry) => entry.message.includes('.env')), [], `${c.label}：不应因 .env 告警`);
+                assert.deepEqual(bomEnvKeys(), [], `${c.label}：不得残留 BOM 前缀键`);
+            } finally {
+                cleanupEnv(c.key, c.second.split('=')[0]);
+                Config.setRootDir(dir);
+                rmSync(bomDir, { recursive: true, force: true });
+            }
         }
     });
 });

@@ -199,7 +199,7 @@ import { HttpRes } from 'ysyuki-lib-on-nodejs/httpServer/httpRes';
 | 路径 | 必需 | 说明 |
 | --- | --- | --- |
 | `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；**缺失、解析失败或内容整体不是对象（如文件就是 `null`）时 `getConfig` 一律返回 `false`，并记一次 WARN 日志**（同一宿主根只告警一次，`setRootDir` 重置；WARN 只带文件路径与**脱敏后的**失败类别，不带异常 message 与文件内容） |
-| `.env` | 否 | `Config.getEnv(key)` 补充来源；系统环境变量优先，文件缺失静默忽略 |
+| `.env` | 否 | `Config.getEnv(key)` 补充来源；系统环境变量优先，文件缺失静默忽略；**兼容 UTF-8 BOM**（记事本 / PowerShell 5.1 `Set-Content -Encoding UTF8` 写出的 BOM 会被 Node 原生 `process.loadEnvFile()` 并入首个键名，库在加载后修正，系统环境仍优先）；**限制**：BOM 后首行写作 `export KEY=…` 或键名前带缩进时整行不被原生解析器匹配，该键取不到，此时**记一次 WARN 日志**（只带路径与固定原因，不带键名与值）；UTF-16 编码的 `.env` 不支持 |
 | `dev.config.json` | 否 | **存在即开发环境**：日志全级别、`getConfig` 走 dev 覆盖链 |
 | `CA/cacert.pem` | 否 | HTTPS 自定义 CA；**公共站点无需配置**（Node 自带根 CA 且默认校验证书链），文件缺失时回退系统 CA；`ca` 为替换语义，只放需额外信任的私有 CA |
 | `log/` | 否 | 自动创建；`app-YYYY-MM-DD.log`，保留最近 3 天 |
