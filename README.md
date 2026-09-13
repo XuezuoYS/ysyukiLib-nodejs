@@ -123,7 +123,7 @@ Yaml.stringifyAll([{ a: 1 }, { b: 2 }]);
 
 | 子路径 | 导出 |
 | --- | --- |
-| `ysyuki-lib-on-nodejs/config` | `Config` — 宿主根、`.env`、`config.yaml` / `config.json`（`choiceFormat`）与开发配置 |
+| `ysyuki-lib-on-nodejs/config` | `Config` — 宿主根、`.env`、`config.yaml` / `config.json`（`choiceFormat`）与开发配置；小写包装 `getenv` / `getcfg` / `isdev` |
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` — 结构化日志；`Logger.create({ level })` 得到等级独立的子 logger |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` — 出站 HTTP/HTTPS 客户端 |
 | `ysyuki-lib-on-nodejs/yaml` | `Yaml` / `YamlError` — YAML 1.2 读取 / 写出 |
@@ -149,6 +149,10 @@ Config.configFormat;                 // 'yaml'（默认）
 Config.getConfig('port');            // yaml → config.yaml；json → config.json
 Config.choiceFormat('json');         // 沿用旧 config.json 的宿主显式切回 json（立即生效）
 ```
+
+三个全小写便捷包装与驼峰方法**完全等价**（转发调用，替换驼峰方法后包装同样跟着变）：
+`Config.getenv(key)` = `Config.getEnv(key)`、`Config.getcfg(key)` = `Config.getConfig(key)`、
+`Config.isdev()` = `Config.isDev()`。
 
 两种格式**只换扩展名、互不回退**：yaml 只读 `config.yaml` / `dev.config.yaml`，
 json 只读 `config.json` / `dev.config.json`。切换格式会重置配置缓存与 dev 判定缓存；
