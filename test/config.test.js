@@ -11,6 +11,9 @@ import { captureStdout } from './loggerFixture.js';
 
 /**
  * 宿主项目根夹具：库自身目录不含 config.json / .env，测试必须自带根目录
+ *
+ * 本文件沿用 `config.json` 夹具（含 V8 SyntaxError 文案自校验等 JSON 专属断言），
+ * 故显式把格式钉在 `'json'`；yaml 为默认格式的覆盖见 configFormat.test.js。
  */
 const dir = mkdtempSync(join(tmpdir(), 'ysyuki-cfg-'));
 writeFileSync(join(dir, 'config.json'), JSON.stringify({
@@ -28,10 +31,12 @@ Logger.logDir = logDir;
 // 系统环境优先的哨兵值，必须在首次 envRead 之前注入
 process.env.YSYUKI_TEST_ENV_BOTH = 'from-system';
 
+Config.choiceFormat('json');
 Config.setRootDir(dir);
 
 after(() => {
     Config.setRootDir(null);
+    Config.choiceFormat('yaml');
     delete process.env.YSYUKI_TEST_ENV_BOTH;
     Logger.logDir = null;
     rmSync(dir, { recursive: true, force: true });
@@ -49,7 +54,11 @@ describe('Config：宿主项目根解析', () => {
         assert.equal(Config.resolveFromRoot('CA', 'cacert.pem'), join(dir, 'CA', 'cacert.pem'));
     });
 
-    it('devConfigFile：默认为宿主根下 dev.config.json', () => {
+    it('configFormat：本文件显式钉在 json', () => {
+        assert.equal(Config.configFormat, 'json');
+    });
+
+    it('devConfigFile：默认为宿主根下 dev.config.json（json 格式）', () => {
         assert.equal(Config.devConfigFile, join(dir, 'dev.config.json'));
     });
 

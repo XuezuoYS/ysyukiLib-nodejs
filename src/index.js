@@ -5,7 +5,7 @@
  * 等价于逐个从子路径导入（同一实现，类对象同一）。
  *
  * 源码按域组织，本文件是唯一聚合点：
- * - 基础设施：Config（宿主根 / .env / config.json）、Logger（结构化日志）
+ * - 基础设施：Config（宿主根 / .env / 配置文件 yaml|json）、Logger（结构化日志）
  * - 出站 HTTP：HttpClient
  * - 入站 HTTP 服务端：httpServer/（HttpServer、Router、HttpReq、HttpRes、ServerLogger、AppError）
  * - YAML：yaml/（Yaml 读取/写出、YamlError）

@@ -51,4 +51,19 @@ describe('Yaml 规范示例', () => {
     it('本库取舍：制表符参与缩进一律报错', () => {
         assert.throws(() => Yaml.parse('a:\n\tb: 1\n'), (error) => error instanceof YamlError && error.kind === 'scan');
     });
+
+    it('JSON 兼容：压缩 / 美化后的 JSON 文本与 JSON.parse 等值', () => {
+        const source = {
+            host: 'localhost',
+            port: 8080,
+            nested: { list: [1, 2, 3], flag: true, nil: null },
+            text: 'a: b',
+        };
+        const compact = JSON.stringify(source);
+        const pretty = JSON.stringify(source, null, 2);
+
+        assert.deepEqual(Yaml.parse(compact), JSON.parse(compact));
+        assert.deepEqual(Yaml.parse(pretty), JSON.parse(pretty));
+        assert.deepEqual(Yaml.parse(Yaml.stringify(source)), source);
+    });
 });

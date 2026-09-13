@@ -263,6 +263,16 @@ export class Scanner {
     #streamEndProduced = false;
 
     /**
+     * 最近一个**扫描出来**的 token（不含回插的 KEY / BLOCK_MAPPING_START）
+     *
+     * 用于 JSON 兼容形态的判定：`{"a":1}` 里的 `:` 后面直接跟值，
+     * 规范只允许"JSON 风格键 + 紧邻值"（见 #isJsonLikeToken）。
+     *
+     * @type {any}
+     */
+    #lastToken = null;
+
+    /**
      * @default options = {}
      * @param {string} text 输入文本
      * @param {{filename?: string|null}} [options] 扫描选项（仅文件名，用于错误定位）
@@ -346,6 +356,26 @@ export class Scanner {
      */
     #enqueue(token) {
         this.#tokens.push(token);
+        this.#lastToken = token;
+    }
+
+    /**
+     * 是否"JSON 风格节点"
+     *
+     * 规范的 `c-ns-flow-map-adjacent-value` 只跟在 JSON 风格键（引号标量）或流式集合之后：
+     * `{"a":1}` 与 `{[1]:2}` 合法，而 `{a:1}` 是"一个 plain 标量 a:1"，不能当成键值对。
+     *
+     * @returns {boolean} 紧邻值形态成立返回 true
+     */
+    #isJsonLikeLastToken() {
+        const token = this.#lastToken;
+        if (token === null) {
+            return false;
+        }
+        if (token.type === TOKEN.SCALAR) {
+            return token.style !== '';
+        }
+        return token.type === TOKEN.FLOW_SEQUENCE_END || token.type === TOKEN.FLOW_MAPPING_END;
     }
 
     /**
@@ -432,7 +462,8 @@ export class Scanner {
             this.#fetchKey();
             return;
         }
-        if (ch === ':' && (isBlankOrBreakZ(next) || (this.#flowLevel > 0 && isFlowIndicator(next)))) {
+        if (ch === ':' && (isBlankOrBreakZ(next)
+            || (this.#flowLevel > 0 && (isFlowIndicator(next) || this.#isJsonLikeLastToken())))) {
             this.#fetchValue();
             return;
         }
@@ -930,7 +961,9 @@ export class Scanner {
         }
         this.#reader.forward();
         this.#removeSimpleKey();
-        this.#simpleKeyAllowed = true;
+        // 块上下文里 `?` 之后可以再起简单键；流式上下文里不行——
+        // 否则 `{? a: 1}` 会在 `:` 处再插一个 KEY，把显式键的键值对拆成两个空键值对
+        this.#simpleKeyAllowed = this.#flowLevel === 0;
         this.#enqueue({ type: TOKEN.KEY, start, end: this.#reader.mark() });
     }
 

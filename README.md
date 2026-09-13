@@ -7,7 +7,7 @@
 
 ## 特性
 
-- **Config** — 宿主项目根解析，`.env` / `config.json` / `dev.config.json` 读取
+- **Config** — 宿主项目根解析，`.env` 与配置文件读取（`Config.choiceFormat('yaml'|'json')`，默认 yaml）
 - **Logger** — 结构化日志，stdout + 按日滚动文件双通道；记录日志自身永不抛错
 - **HttpClient** — 出站 HTTP/HTTPS：重定向（协议白名单）、超时、自定义 CA、响应体上限、并发请求头隔离
 - **Yaml** — 自研 YAML 1.2 解析与序列化：块/流集合、块标量、锚点/别名/合并键、指令与标签、多文档
@@ -106,7 +106,7 @@ tags:
   - b
 `);
 
-// 文件版本：绝对路径原样使用，相对路径基于宿主项目根（与 .env / config.json 同一规则）
+// 文件版本：绝对路径原样使用，相对路径基于宿主项目根（与 .env / 配置文件同一规则）
 const appConfig = Yaml.parseFile('config/app.yaml');
 
 // 写出：输出可被 parse 回等价值（Map/Set/Date/Buffer 用显式标签，环状结构用锚点/别名）
@@ -123,7 +123,7 @@ Yaml.stringifyAll([{ a: 1 }, { b: 2 }]);
 
 | 子路径 | 导出 |
 | --- | --- |
-| `ysyuki-lib-on-nodejs/config` | `Config` — 宿主根、`.env` / `config.json` / `dev.config.json` |
+| `ysyuki-lib-on-nodejs/config` | `Config` — 宿主根、`.env`、`config.yaml` / `config.json`（`choiceFormat`）与开发配置 |
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` — 结构化日志；`Logger.create({ level })` 得到等级独立的子 logger |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` — 出站 HTTP/HTTPS 客户端 |
 | `ysyuki-lib-on-nodejs/yaml` | `Yaml` / `YamlError` — YAML 1.2 读取 / 写出 |
@@ -140,11 +140,25 @@ Yaml.stringifyAll([{ a: 1 }, { b: 2 }]);
 `Config.setRootDir(dir)` → 环境变量 `YUKI_PROJECT_ROOT` → 入口脚本向上最近的含 `package.json` 的目录 →
 `process.cwd()`。`setRootDir(null)` 恢复自动解析并重置缓存；测试里建议显式指定临时根目录。
 
+配置文件格式由 `Config.choiceFormat('yaml' | 'json')` 决定，**默认 `'yaml'`**（当前值读 `Config.configFormat`）：
+
+```js
+import { Config } from '#YukiLib/config';
+
+Config.configFormat;                 // 'yaml'（默认）
+Config.getConfig('port');            // yaml → config.yaml；json → config.json
+Config.choiceFormat('json');         // 沿用旧 config.json 的宿主显式切回 json（立即生效）
+```
+
+两种格式**只换扩展名、互不回退**：yaml 只读 `config.yaml` / `dev.config.yaml`，
+json 只读 `config.json` / `dev.config.json`。切换格式会重置配置缓存与 dev 判定缓存；
+`setRootDir()` 与 `choiceFormat()` 互不重置对方设置。
+
 | 路径 | 必需 | 说明 |
 | --- | --- | --- |
-| `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；缺失、解析失败或内容整体不是对象时一律返回 `false` 并记一次 WARN（只带路径与脱敏后的失败类别，不带文件内容） |
+| `config.yaml`（默认）/ `config.json` | 视项目 | `Config.getConfig(key)` 的取值来源；缺失、解析失败或内容整体不是对象时一律返回 `false` 并记一次 WARN（只带路径与脱敏后的失败类别，不带文件内容） |
 | `.env` | 否 | `Config.getEnv(key)` 的补充来源；系统环境变量优先，文件缺失静默忽略；兼容 UTF-8 BOM，不支持 UTF-16 |
-| `dev.config.json` | 否 | **存在即开发环境**：日志默认全级别，取值走 `dev[name] > config[name.dev] > config[name]` |
+| `dev.config.yaml`（默认）/ `dev.config.json` | 否 | **存在即开发环境**：日志默认全级别，取值走 `dev[name] > config[name.dev] > config[name]` |
 | `CA/cacert.pem` | 否 | 只有私有 / 自签名 CA 才需要（公共站点走 Node 内置根 CA）；`ca` 为**替换**语义，只放需额外信任的私有 CA，想追加用 `NODE_EXTRA_CA_CERTS` |
 | `log/` | 否 | 自动创建；`app-YYYY-MM-DD.log`，保留最近 3 天 |
 
@@ -153,7 +167,7 @@ Yaml.stringifyAll([{ a: 1 }, { b: 2 }]);
 ```js
 import { Logger } from '#YukiLib/logger';
 
-Logger.defaultLevel;                            // 宿主根有 dev.config.json → info，否则 warn
+Logger.defaultLevel;                            // 宿主根有当前格式的 dev 配置文件 → info，否则 warn
 const access = Logger.create({ level: 'info' }); // 子 logger 各自独立，不影响根 Logger
 access.info('访问明细');                          // 生产环境同样记录
 Logger.info('一般信息');                          // 生产默认 warn 阈值 → 丢弃
@@ -164,7 +178,7 @@ Logger.info('一般信息');                          // 生产默认 warn 阈�
 等级为**阈值**语义（`warn` 记 warn+error，`info` 记全部，`error` 只记 error）。
 行格式 `ISO时间\tLEVEL\t消息\t附加字段JSON`；不可序列化的字段降级为 `[Circular]` /
 `[BigInt 10]` / `[Getter threw]` 等标记，两个写通道各自独立失败——Logger 常是 `catch` / `onError`
-的兜底路径，不能反过来炸宿主。dev 判定按路径缓存，同一路径上增删 `dev.config.json`
+的兜底路径，不能反过来炸宿主。dev 判定按路径缓存，同一路径上增删 dev 配置文件
 需显式 `Logger.resetDevCache()`（或重启）才生效。
 
 ## 仓库结构

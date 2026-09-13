@@ -11,10 +11,12 @@ import { captureStdout, parseLogLine } from './loggerFixture.js';
 
 /**
  * 测试基座：宿主根与日志目录重定向到临时目录；dev 在场文件由夹具控制（不依赖库目录状态）
+ *
+ * dev 文件用默认格式（yaml）的 `dev.config.yaml`，与 Logger.defaultLevel 的真实判定一致。
  */
 const dir = mkdtempSync(join(tmpdir(), 'ysyuki-logger-'));
-const devFixture = join(dir, 'dev.config.json');
-writeFileSync(devFixture, '{}', 'utf8');
+const devFixture = join(dir, 'dev.config.yaml');
+writeFileSync(devFixture, '{}\n', 'utf8');
 Config.setRootDir(dir);
 Config.devConfigFile = devFixture;
 Logger.logDir = join(dir, 'logs');
@@ -151,7 +153,7 @@ describe('Logger：等级阈值与配置隔离', () => {
             });
             assert.deepEqual(entries.map((e) => e.message), ['生产保留']);
         } finally {
-            writeFileSync(devFixture, '{}', 'utf8');
+            writeFileSync(devFixture, '{}\n', 'utf8');
         }
 
         Logger.resetDevCache();

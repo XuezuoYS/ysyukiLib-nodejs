@@ -123,6 +123,22 @@ describe('Yaml Scanner', () => {
         );
     });
 
+    it('JSON 兼容形态：JSON 风格键后面可以紧跟值（`{"a":1}`）', () => {
+        assert.equal(
+            compact(tokens('{"a":1}')),
+            'STREAM_START FLOW_MAPPING_START KEY SCALAR(double "a") VALUE SCALAR("1") FLOW_MAPPING_END STREAM_END',
+        );
+        assert.equal(
+            compact(tokens('{[1]:2}')),
+            'STREAM_START FLOW_MAPPING_START KEY FLOW_SEQUENCE_START SCALAR("1") FLOW_SEQUENCE_END VALUE SCALAR("2") FLOW_MAPPING_END STREAM_END',
+        );
+        // 显式键 + 紧邻值：`?` 之后不能因为 `:` 再插一个 KEY
+        assert.equal(
+            compact(tokens('{? "a":1}')),
+            'STREAM_START FLOW_MAPPING_START KEY SCALAR(double "a") VALUE SCALAR("1") FLOW_MAPPING_END STREAM_END',
+        );
+    });
+
     it('显式键 ? 与显式值 :', () => {
         assert.equal(
             compact(tokens('? a\n: b\n')),

@@ -12,6 +12,9 @@ import { Logger } from '#YukiLib/logger';
  *
  * 全部经由可注入的 Config.devConfigFile 与预置缓存完成，
  * 不触碰真实 config.json / 宿主根 dev.config.json。
+ *
+ * 本文件用 `.json` 文件名与 JSON 内容，故把格式显式钉在 `'json'`；
+ * yaml 格式（默认）下的 dev 判定与覆盖见 configFormat.test.js。
  */
 
 const dir = mkdtempSync(join(tmpdir(), 'ysyuki-devcfg-'));
@@ -21,6 +24,7 @@ const logDir = mkdtempSync(join(tmpdir(), 'ysyuki-devcfg-log-'));
 Logger.logDir = logDir;
 
 // 宿主根重定向到临时目录；必须在预置缓存之前
+Config.choiceFormat('json');
 Config.setRootDir(dir);
 
 /** @param {string} name @param {string} content @returns {string} 夹具绝对路径 */
@@ -133,6 +137,7 @@ describe('Config.getConfig()：dev 数据形态容错（B3）', () => {
 
 after(() => {
     Config.setRootDir(null);
+    Config.choiceFormat('yaml');
     Logger.logDir = null;
     rmSync(dir, { recursive: true, force: true });
     rmSync(logDir, { recursive: true, force: true });

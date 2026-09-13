@@ -17,7 +17,8 @@ import { makeCtx, makeResStub } from './contextFixture.js';
  * 断言通过捕获 stdout 完成，不依赖库自身目录状态。
  */
 const dir = mkdtempSync(join(tmpdir(), 'ysyuki-serverlogger-'));
-writeFileSync(join(dir, 'dev.config.json'), '{}', 'utf8');
+// dev 文件用默认格式（yaml）的名字：存在即开发环境，ServerLogger 默认记录 info
+writeFileSync(join(dir, 'dev.config.yaml'), '{}\n', 'utf8');
 Config.setRootDir(dir);
 Logger.logDir = join(dir, 'logs');
 
