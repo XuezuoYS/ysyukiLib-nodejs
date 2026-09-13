@@ -136,6 +136,41 @@ describe('Config.getConfig', () => {
     });
 });
 
+describe('Config：全小写便捷包装', () => {
+    it('getenv / getcfg / isdev 与对应驼峰方法结果一致', () => {
+        assert.equal(Config.getenv('YSYUKI_TEST_ENV_FILE_ONLY'), Config.getEnv('YSYUKI_TEST_ENV_FILE_ONLY'));
+        assert.equal(Config.getenv('YSYUKI_TEST_ENV_NOT_EXIST'), false);
+        assert.equal(Config.getcfg('host'), Config.getConfig('host'));
+        assert.equal(Config.getcfg('ysyuki_test_not_exist'), false);
+        assert.equal(Config.isdev(), Config.isDev());
+        // 夹具根下没有 dev 配置文件：包装与驼峰方法一样给 false
+        assert.equal(Config.isdev(), false);
+    });
+
+    it('是转发调用而非函数快照：替换驼峰方法后包装跟着变', () => {
+        const realGetConfig = Config.getConfig;
+        const realIsDev = Config.isDev;
+        const realGetEnv = Config.getEnv;
+        try {
+            Config.getConfig = () => 'patched-config';
+            Config.isDev = () => true;
+            Config.getEnv = () => 'patched-env';
+
+            assert.equal(Config.getcfg('any'), 'patched-config');
+            assert.equal(Config.isdev(), true);
+            assert.equal(Config.getenv('any'), 'patched-env');
+        } finally {
+            Config.getConfig = realGetConfig;
+            Config.isDev = realIsDev;
+            Config.getEnv = realGetEnv;
+        }
+
+        // 还原后立即回到真实实现
+        assert.equal(Config.getcfg('host'), '127.0.0.1');
+        assert.equal(Config.isdev(), false);
+    });
+});
+
 /**
  * 直接取 JSON.parse 的原始失败消息
  *

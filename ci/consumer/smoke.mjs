@@ -255,6 +255,13 @@ await check('Yaml：解析 / 序列化 / 错误类型可用', () => {
     );
 });
 
+await check('Config 全小写便捷包装已导出', () => {
+    // 只做形状断言：调用 getcfg 在缺失配置的消费者目录里会产生 WARN 与日志文件
+    for (const name of ['getenv', 'getcfg', 'isdev']) {
+        assert.equal(typeof pkgRoot.Config[name], 'function', `Config.${name} 应为函数`);
+    }
+});
+
 // —— 结果 ——————————————————————————————————————————————————————————
 if (failures.length > 0) {
     process.stderr.write(`\n冒烟失败 ${failures.length}/${checks}：\n- ${failures.join('\n- ')}\n`);

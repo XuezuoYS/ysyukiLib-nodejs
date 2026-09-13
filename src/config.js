@@ -48,6 +48,9 @@ import { YamlError } from './yaml/yamlError.js';
  * 开发配置路径的显式指定与"已告警"标记（切换宿主根后重新评估是否需要告警）；
  * choiceFormat() 会重置配置缓存与"已告警"标记（切换格式后按新格式重读）。
  *
+ * 三个全小写便捷包装与对应方法完全等价（转发调用，不是函数快照）：
+ * `Config.getenv(key)` → `getEnv`、`Config.getcfg(key)` → `getConfig`、`Config.isdev()` → `isDev`。
+ *
  * `.env` 用 `process.loadEnvFile()` 原生加载（Node 20.6+），
  * 其语义为"已存在的 `process.env` 键不被覆盖"，即系统环境变量优先，文件缺失时忽略；
  * 生产环境全部由 Windows 系统/服务环境提供，不依赖 `.env`。
@@ -379,7 +382,7 @@ function detectRootFromEntry(entry) {
  * 见本文件顶部 `@fileoverview` 与 README。
  *
  * 常用入口：getEnv / getConfig / isDev / getRootDir / setRootDir / resolveFromRoot /
- * choiceFormat / configFormat
+ * choiceFormat / configFormat；全小写便利写法 getenv / getcfg / isdev
  */
 export class Config {
     /**
@@ -810,5 +813,41 @@ export class Config {
         }
 
         return Object.prototype.hasOwnProperty.call(Config.configData, key) ? Config.configData[key] : false;
+    }
+
+    /**
+     * `getEnv()` 的全小写便捷包装
+     *
+     * 与 `getEnv()` 完全等价——**每次调用转发**过去，而不是把函数引用存成快照，
+     * 因此宿主替换 `Config.getEnv` 后包装同样跟着变。
+     *
+     * @param {string} key 环境变量键名
+     * @returns {string|false} 获取成功返回环境变量值，失败返回 false
+     */
+    static getenv(key) {
+        return Config.getEnv(key);
+    }
+
+    /**
+     * `getConfig()` 的全小写便捷包装
+     *
+     * 与 `getConfig()` 完全等价（同上，转发而非快照）。
+     *
+     * @param {string} key 配置项键名
+     * @returns {any|false} 获取成功返回配置项值（可为字符串/数字/布尔/对象），失败返回 false
+     */
+    static getcfg(key) {
+        return Config.getConfig(key);
+    }
+
+    /**
+     * `isDev()` 的全小写便捷包装
+     *
+     * 与 `isDev()` 完全等价（同上，转发而非快照）。
+     *
+     * @returns {boolean} 存在当前格式的开发配置文件返回 true，否则 false
+     */
+    static isdev() {
+        return Config.isDev();
     }
 }
