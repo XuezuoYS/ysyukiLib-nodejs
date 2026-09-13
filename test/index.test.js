@@ -5,6 +5,8 @@ import * as barrel from 'ysyuki-lib-on-nodejs';
 import { Config } from 'ysyuki-lib-on-nodejs/config';
 import { Config as AliasConfig } from '#YukiLib/config';
 import { Logger as AliasLogger } from '#YukiLib/logger';
+import { Yaml as DeepYaml } from '#YukiLib/yaml/yaml';
+import { Yaml as YamlBarrel } from 'ysyuki-lib-on-nodejs/yaml';
 
 /**
  * 包入口与子路径导出一致性
@@ -15,16 +17,18 @@ import { Logger as AliasLogger } from '#YukiLib/logger';
  *   `import { Config } from '#YukiLib/config'` 写法成立。
  */
 describe('包入口与子路径导出', () => {
-    it('barrel 导出全部 11 个类', () => {
+    it('barrel 导出全部 13 个类', () => {
         assert.deepEqual(
             Object.keys(barrel).sort(),
-            ['AppError', 'Config', 'FuncResult', 'HttpClient', 'HttpReq', 'HttpRes', 'HttpServer', 'Logger', 'Middleware', 'Router', 'ServerLogger'],
+            ['AppError', 'Config', 'FuncResult', 'HttpClient', 'HttpReq', 'HttpRes', 'HttpServer', 'Logger', 'Middleware', 'Router', 'ServerLogger', 'Yaml', 'YamlError'],
         );
     });
 
     it('子路径导出与 barrel 为同一实现（同一类对象）', () => {
         assert.equal(barrel.Config, Config);
         assert.equal(barrel.Logger, AliasLogger);
+        assert.equal(barrel.Yaml, YamlBarrel);
+        assert.equal(barrel.Yaml, DeepYaml);
     });
 
     it('#YukiLib/* 别名与子路径指向同一实现', () => {
@@ -44,5 +48,7 @@ describe('包入口与子路径导出', () => {
         assert.equal(typeof barrel.HttpRes.jsonRes, 'function');
         assert.equal(typeof barrel.Middleware.cors, 'function');
         assert.equal(typeof barrel.ServerLogger.prototype.access, 'function');
+        assert.deepEqual(barrel.Yaml.parse('a: 1\n'), { a: 1 });
+        assert.ok(new barrel.YamlError('parse', 'x') instanceof barrel.YamlError);
     });
 });

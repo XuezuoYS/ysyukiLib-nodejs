@@ -8,6 +8,7 @@
  * - 基础设施：Config（宿主根 / .env / config.json）、Logger（结构化日志）
  * - 出站 HTTP：HttpClient
  * - 入站 HTTP 服务端：httpServer/（HttpServer、Router、HttpReq、HttpRes、ServerLogger、AppError）
+ * - YAML：yaml/（Yaml 读取/写出、YamlError）
  * - 值对象：FuncResult
  */
 export { AppError } from './httpServer/appError.js';
@@ -21,3 +22,5 @@ export { Logger } from './logger.js';
 export { Middleware } from './httpServer/middleware.js';
 export { Router } from './httpServer/router.js';
 export { ServerLogger } from './httpServer/serverLogger.js';
+export { Yaml } from './yaml/yaml.js';
+export { YamlError } from './yaml/yamlError.js';

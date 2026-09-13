@@ -1,6 +1,6 @@
 # ysyuki-lib-on-nodejs
 
-跨项目通用的 Node.js 基础库：配置、日志、出站 HTTP 客户端与入站 HTTP 服务框架。
+跨项目通用的 Node.js 基础库：配置、日志、出站 HTTP 客户端、入站 HTTP 服务框架与 YAML 读写。
 
 零第三方运行时依赖（只用 Node 内置模块）· 纯 JavaScript + JSDoc（无构建链）· ESM ·
 目标是"在不同项目里的库体验一致"：同一套类、行为约定与命名风格。
@@ -10,6 +10,7 @@
 - **Config** — 宿主项目根解析，`.env` / `config.json` / `dev.config.json` 读取
 - **Logger** — 结构化日志，stdout + 按日滚动文件双通道；记录日志自身永不抛错
 - **HttpClient** — 出站 HTTP/HTTPS：重定向（协议白名单）、超时、自定义 CA、响应体上限、并发请求头隔离
+- **Yaml** — 自研 YAML 1.2 解析与序列化：块/流集合、块标量、锚点/别名/合并键、指令与标签、多文档
 - **FuncResult** — 不可变业务结果值对象
 - **httpServer** — FastAPI 风格模板路由 + 洋葱中间件 + 一行式请求/响应门面 + 优雅关闭
 
@@ -92,6 +93,32 @@ HttpServer.create({ router, serviceName: 'example-service' })
 响应与错误契约、执行顺序、模板语法与内置类型、取值类型保证、内置中间件、优雅关闭选项等
 完整约定见 **[docs/httpServer.md](./docs/httpServer.md)**。
 
+### 读 / 写 YAML
+
+```js
+import { Yaml } from '#YukiLib/yaml';
+
+const config = Yaml.parse(`
+service: demo
+port: 8080
+tags:
+  - a
+  - b
+`);
+
+// 文件版本：绝对路径原样使用，相对路径基于宿主项目根（与 .env / config.json 同一规则）
+const appConfig = Yaml.parseFile('config/app.yaml');
+
+// 写出：输出可被 parse 回等价值（Map/Set/Date/Buffer 用显式标签，环状结构用锚点/别名）
+Yaml.stringify({ service: 'demo', port: 8080 });
+Yaml.stringifyAll([{ a: 1 }, { b: 2 }]);
+```
+
+支持完整 YAML 1.2 语法（块/流集合、`|` 与 `>` 块标量、锚点/别名、`<<` 合并键、
+`%YAML` / `%TAG` 指令、显式标签、`?` 复杂键、多文档）。
+选项表、四张隐式类型表、安全限额（别名 / 合并展开、嵌套深度）、错误定位与 round-trip 例外清单
+见 **[docs/yaml.md](./docs/yaml.md)**。
+
 ## 模块
 
 | 子路径 | 导出 |
@@ -99,11 +126,13 @@ HttpServer.create({ router, serviceName: 'example-service' })
 | `ysyuki-lib-on-nodejs/config` | `Config` — 宿主根、`.env` / `config.json` / `dev.config.json` |
 | `ysyuki-lib-on-nodejs/logger` | `Logger` / `SubLogger` — 结构化日志；`Logger.create({ level })` 得到等级独立的子 logger |
 | `ysyuki-lib-on-nodejs/httpClient` | `HttpClient` — 出站 HTTP/HTTPS 客户端 |
+| `ysyuki-lib-on-nodejs/yaml` | `Yaml` / `YamlError` — YAML 1.2 读取 / 写出 |
 | `ysyuki-lib-on-nodejs/funcResult` | `FuncResult` — 不可变业务结果对象 |
 | `ysyuki-lib-on-nodejs/httpServer` | `HttpServer` / `Router` / `HttpReq` / `HttpRes` / `AppError` / `Middleware` / `ServerLogger` / `encodeUrlParam` / `HTTP_METHODS` |
 | `ysyuki-lib-on-nodejs/httpServer/<name>` | 子域明细：`server` / `context` / `httpReq` / `httpRes` / `appError` / `serverLogger` / `router` / `onion` / `middleware` |
+| `ysyuki-lib-on-nodejs/yaml/<name>` | 子域明细：`yaml`（入口类）/ `yamlError` / `reader` / `scanner` / `parser` / `composer` / `schema` / `constructor` / `stringify` / `options`（内部层不承诺兼容） |
 
-包根 `ysyuki-lib-on-nodejs` 聚合以上全部 11 个类，等价于逐个从子路径导入。
+包根 `ysyuki-lib-on-nodejs` 聚合以上全部 13 个类，等价于逐个从子路径导入。
 
 ## 宿主项目可选文件
 
@@ -144,6 +173,8 @@ Logger.info('一般信息');                          // 生产默认 warn 阈�
 src/             基础设施与出站模块：config / logger / httpClient / funcResult / index
 src/httpServer/  入站 HTTP 服务端框架：server / context / httpReq / httpRes / appError /
                  serverLogger / router / onion / middleware（含子域 barrel）
+src/yaml/        YAML 1.2 读取 / 写出：yaml（入口类）/ yamlError / reader / scanner /
+                 parser / composer / schema / constructor / stringify / options（含子域 barrel）
 test/            与 src/ 同构镜像；每个模块的实现与测试同仓库同提交
 ci/ .github/     CI 夹具与工作流（不进包，files 只含 src）
 ```
@@ -169,6 +200,7 @@ pnpm test     # node:test 全量
 
 - [CHANGELOG.md](./CHANGELOG.md) — 更新日志（Keep a Changelog + SemVer，与 `v*` tag 对应）
 - [docs/httpServer.md](./docs/httpServer.md) — httpServer 框架的完整行为约定
+- [docs/yaml.md](./docs/yaml.md) — YAML 读取 / 写出的完整行为约定（语法覆盖、选项、安全限额、round-trip 例外）
 - [docs/migrateFrom.md](./docs/migrateFrom.md) — 旧 API 迁移对照，以及历次行为/安全差异（含破坏性变更清单）
 
 ## 许可证

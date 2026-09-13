@@ -37,6 +37,8 @@ const EXPECTED_EXPORTS = Object.freeze([
     'Middleware',
     'Router',
     'ServerLogger',
+    'Yaml',
+    'YamlError',
 ]);
 
 /** 绝不允许出现在已安装包里的东西（装了源码树以外的东西 = 打包边界失守） */
@@ -99,11 +101,17 @@ let deepRouter;
 let aliasConfig;
 /** @type {any} */
 let aliasServerBarrel;
+/** @type {any} */
+let yamlBarrel;
+/** @type {any} */
+let deepYaml;
+/** @type {any} */
+let aliasYaml;
 
 // —— 1. 解析与同一性 ————————————————————————————————————————————————
 process.stdout.write('模块解析：\n');
 
-for (const specifier of ['ysyuki-lib-on-nodejs', 'ysyuki-lib-on-nodejs/httpServer', 'ysyuki-lib-on-nodejs/httpServer/router', '#YukiLib/config', '#YukiLib/httpServer']) {
+for (const specifier of ['ysyuki-lib-on-nodejs', 'ysyuki-lib-on-nodejs/httpServer', 'ysyuki-lib-on-nodejs/httpServer/router', 'ysyuki-lib-on-nodejs/yaml', 'ysyuki-lib-on-nodejs/yaml/yaml', '#YukiLib/config', '#YukiLib/httpServer', '#YukiLib/yaml']) {
     await check(`可解析 ${specifier}`, async () => {
         await importSpec(specifier);
     });
@@ -114,6 +122,9 @@ serverBarrel = await importSpec('ysyuki-lib-on-nodejs/httpServer').catch(() => (
 deepRouter = await importSpec('ysyuki-lib-on-nodejs/httpServer/router').catch(() => ({}));
 aliasConfig = await importSpec('#YukiLib/config').catch(() => ({}));
 aliasServerBarrel = await importSpec('#YukiLib/httpServer').catch(() => ({}));
+yamlBarrel = await importSpec('ysyuki-lib-on-nodejs/yaml').catch(() => ({}));
+deepYaml = await importSpec('#YukiLib/yaml/yaml').catch(() => ({}));
+aliasYaml = await importSpec('#YukiLib/yaml').catch(() => ({}));
 
 await check(`包根导出齐全（${EXPECTED_EXPORTS.length} 个类）`, () => {
     assert.ok(pkgRoot, '包根导入失败');
@@ -144,6 +155,10 @@ await check('包根 === 子域 barrel === 深子路径 === 宿主别名', () => 
     assert.equal(pkgRoot.Router, deepRouter.Router, '/httpServer 与 /httpServer/router 的 Router 不是同一实现');
     assert.equal(pkgRoot.Router, aliasServerBarrel.Router, '宿主 #YukiLib/httpServer 别名与包名子路径不是同一实现');
     assert.equal(pkgRoot.Config, aliasConfig.Config, '宿主 #YukiLib/config 别名与包名子路径不是同一实现');
+    assert.equal(pkgRoot.Yaml, yamlBarrel.Yaml, '包根与 /yaml 的 Yaml 不是同一实现');
+    assert.equal(pkgRoot.Yaml, deepYaml.Yaml, '/yaml 与 /yaml/yaml 的 Yaml 不是同一实现');
+    assert.equal(pkgRoot.Yaml, aliasYaml.Yaml, '宿主 #YukiLib/yaml 别名与包名子路径不是同一实现');
+    assert.equal(pkgRoot.YamlError, yamlBarrel.YamlError, '包根与 /yaml 的 YamlError 不是同一实现');
 });
 
 // —— 3. 包边界与清单 ————————————————————————————————————————————————
@@ -227,6 +242,17 @@ await check('HTTP_METHODS / encodeUrlParam 可用', () => {
     assert.ok(serverBarrel.HTTP_METHODS.includes('GET'));
     assert.equal(typeof serverBarrel.encodeUrlParam, 'function');
     assert.equal(serverBarrel.encodeUrlParam('a b'), 'a%20b');
+});
+
+await check('Yaml：解析 / 序列化 / 错误类型可用', () => {
+    assert.deepEqual(pkgRoot.Yaml.parse('a: 1\nb:\n  - x\n  - y\n'), { a: 1, b: ['x', 'y'] });
+    assert.equal(pkgRoot.Yaml.stringify({ a: 1 }), 'a: 1\n');
+    assert.deepEqual(pkgRoot.Yaml.parseAll('--- 1\n--- 2\n'), [1, 2]);
+    assert.deepEqual(pkgRoot.Yaml.parse(pkgRoot.Yaml.stringify({ a: 'b: c' })), { a: 'b: c' });
+    assert.throws(
+        () => pkgRoot.Yaml.parse('a: 1\na: 2\n'),
+        (error) => /** @type {any} */ (error).kind === 'construct',
+    );
 });
 
 // —— 结果 ——————————————————————————————————————————————————————————

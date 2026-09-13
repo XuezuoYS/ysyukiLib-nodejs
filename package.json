@@ -32,6 +32,8 @@
     ".": "./src/index.js",
     "./package.json": "./package.json",
     "./httpServer": "./src/httpServer/index.js",
+    "./yaml": "./src/yaml/index.js",
+    "./yaml/*": "./src/yaml/*.js",
     "./*": "./src/*.js"
   },
   "imports": {
